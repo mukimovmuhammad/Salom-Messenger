@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic SALOM resource snapshots
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20sec
+Persistent=true
+
+[Install]
+WantedBy=timers.target

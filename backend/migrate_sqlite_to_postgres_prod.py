@@ -24,7 +24,7 @@ def validate_target_name(actual_name: str, confirmation: str) -> None:
 
 
 def migrate(source_path: Path, dsn: str, confirmation: str) -> dict[str, dict[str, object]]:
-    source = validate_source(source_path)
+    source, _source_tables = validate_source(source_path)
     target = None
     try:
         target = psycopg.connect(dsn, autocommit=True)

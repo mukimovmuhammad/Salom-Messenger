@@ -24,7 +24,7 @@ internal class DirectoryException(message: String, val status: Int = 0) : Except
 internal data class ConversationPreview(val account: SalomAccount, val lastText: String)
 internal data class MessageEvent(val id: Long, val messageId: Long, val kind: String, val message: Message? = null)
 internal data class MessageBatch(val messages: List<Message>, val receipts: Map<Long, String>, val events: List<MessageEvent>, val hasMore: Boolean, val clearedThrough: Long)
-internal data class RealtimeEvent(val type: String, val connected: Boolean = false, val online: Boolean? = null, val typing: Boolean? = null)
+internal data class RealtimeEvent(val type: String, val connected: Boolean = false, val online: Boolean? = null, val typing: Boolean? = null, val callId: String? = null, val peerId: String? = null, val callerName: String? = null, val state: String? = null, val signalKind: String? = null, val signalPayload: JSONObject? = null)
 
 /** Private installation/session credential for the Salom API. Google sign-in uses AuthClient. */
 internal class DirectoryClient(context: Context) {
@@ -143,6 +143,26 @@ internal class DirectoryClient(context: Context) {
         syncLocal(); request("typing?peer_id=" + URLEncoder.encode(peerId, "UTF-8")).optBoolean("typing")
     }
 
+    suspend fun createCall(peerId: String): JSONObject = withContext(Dispatchers.IO) {
+        syncLocal(); request("calls", JSONObject().put("peer_id", peerId), "POST")
+    }
+
+    suspend fun updateCall(callId: String, action: String): JSONObject = withContext(Dispatchers.IO) {
+        syncLocal(); request("calls/$callId/state", JSONObject().put("action", action), "POST")
+    }
+
+    suspend fun signalCall(callId: String, kind: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        syncLocal(); request("calls/$callId/signal", JSONObject().put("kind", kind).put("payload", payload), "POST")
+    }
+
+    suspend fun missedCalls(): Int = withContext(Dispatchers.IO) {
+        syncLocal(); request("calls/missed").optInt("unread_count")
+    }
+
+    suspend fun callConfig(): org.json.JSONArray = withContext(Dispatchers.IO) {
+        syncLocal(); request("calls/config").getJSONArray("ice_servers")
+    }
+
     fun realtime(peerId: String): Flow<RealtimeEvent> = callbackFlow {
         val url = "wss://mukimov.site/salom/api/ws"
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
@@ -154,7 +174,12 @@ internal class DirectoryClient(context: Context) {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val data = runCatching { JSONObject(text) }.getOrNull() ?: return
                 val type = data.optString("type")
-                if (type in setOf("message", "typing", "presence", "sync", "ready", "subscribed")) trySend(RealtimeEvent(type, connected = type == "subscribed", online = data.optBoolean("online").takeIf { data.has("online") }, typing = data.optBoolean("typing").takeIf { data.has("typing") }))
+                if (type in setOf("message", "typing", "presence", "sync", "ready", "subscribed", "call_invite", "call_state", "call_signal")) trySend(RealtimeEvent(
+                    type, connected = type == "subscribed", online = data.optBoolean("online").takeIf { data.has("online") },
+                    typing = data.optBoolean("typing").takeIf { data.has("typing") }, callId = data.optString("call_id").takeIf { it.isNotBlank() },
+                    peerId = data.optString("peer_id").takeIf { it.isNotBlank() }, callerName = data.optString("caller_name").takeIf { it.isNotBlank() },
+                    state = data.optString("state").takeIf { it.isNotBlank() }, signalKind = data.optString("kind").takeIf { it.isNotBlank() },
+                    signalPayload = data.optJSONObject("payload")))
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { if (activeRealtime === webSocket) activeRealtime = null; trySend(RealtimeEvent("closed", connected = false)); close() }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { if (activeRealtime === webSocket) activeRealtime = null; trySend(RealtimeEvent("disconnected", connected = false)); close() }

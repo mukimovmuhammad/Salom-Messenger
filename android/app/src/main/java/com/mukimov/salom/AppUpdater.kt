@@ -23,7 +23,7 @@ internal sealed interface UpdateStatus {
     data object Unchecked : UpdateStatus
     data object Checking : UpdateStatus
     data class Current(val checkedAt: Long) : UpdateStatus
-    data object LocalAhead : UpdateStatus
+    data class LocalAhead(val release: AppRelease) : UpdateStatus
     data class Available(val release: AppRelease) : UpdateStatus
     data class Incompatible(val release: AppRelease) : UpdateStatus
     data class Downloading(val release: AppRelease, val bytes: Long) : UpdateStatus
@@ -37,7 +37,11 @@ internal class AppUpdater(application: Application) : AndroidViewModel(applicati
     val installedVersion: String = packageInfo.versionName.orEmpty()
     @Suppress("DEPRECATION")
     val installedCode = if (Build.VERSION.SDK_INT >= 28) packageInfo.longVersionCode else packageInfo.versionCode.toLong()
-    val installedDisplayVersion: String = if (installedVersion == "0.15.0") "$installedVersion Real-Time" else installedVersion
+    val installedDisplayVersion: String = when (installedVersion) {
+        "0.15.0" -> "$installedVersion Real-Time"
+        "0.15.1" -> "$installedVersion CallCookie"
+        else -> installedVersion
+    }
     private val mutableStatus = MutableStateFlow<UpdateStatus>(UpdateStatus.Unchecked)
     val status = mutableStatus.asStateFlow()
     private var job: Job? = null
@@ -68,7 +72,7 @@ internal class AppUpdater(application: Application) : AndroidViewModel(applicati
                 val release = withContext(Dispatchers.IO) { fetchRelease() }
                 mutableStatus.value = when (releaseRelation(installedCode, installedVersion, Build.VERSION.SDK_INT, release)) {
                     ReleaseRelation.CURRENT -> UpdateStatus.Current(System.currentTimeMillis())
-                    ReleaseRelation.LOCAL_AHEAD -> UpdateStatus.LocalAhead
+                    ReleaseRelation.LOCAL_AHEAD -> UpdateStatus.LocalAhead(release)
                     ReleaseRelation.INCOMPATIBLE -> UpdateStatus.Incompatible(release)
                     ReleaseRelation.NEWER_AVAILABLE -> withContext(Dispatchers.IO) {
                         val file = apkFile(release)
@@ -111,7 +115,7 @@ internal class AppUpdater(application: Application) : AndroidViewModel(applicati
             val notes = json.optJSONArray("releaseNotes")
             return AppRelease(json.getString("version"), json.getLong("versionCode"), json.getInt("minSdk"),
                 json.getString("downloadUrl"), json.getLong("size"), json.getString("sha256").lowercase(),
-                (0 until minOf(notes?.length() ?: 0, 5)).map { notes!!.getString(it).take(240) })
+                (0 until minOf(notes?.length() ?: 0, 5)).map { notes!!.getString(it).take(240) }, json.optString("displayName"))
         } finally { connection.disconnect() }
     }
 

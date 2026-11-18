@@ -1,0 +1,6 @@
+[Unit]
+Description=SALOM disk, service and backup resource snapshot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/salom-resource-check

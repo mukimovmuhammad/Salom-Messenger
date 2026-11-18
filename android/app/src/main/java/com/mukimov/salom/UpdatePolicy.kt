@@ -2,9 +2,10 @@ package com.mukimov.salom
 
 import java.net.URI
 
-internal data class AppRelease(val version: String, val code: Long, val minSdk: Int, val url: String, val size: Long, val sha256: String, val notes: List<String> = emptyList()) {
+internal data class AppRelease(val version: String, val code: Long, val minSdk: Int, val url: String, val size: Long, val sha256: String, val notes: List<String> = emptyList(), val displayName: String = "") {
     init {
         require(version.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+")))
+        require(displayName.length < 24 && displayName.matches(Regex("[A-Za-z0-9 -]*")))
         require(code > 0 && minSdk in 24..100 && size in 100_000L..104_857_600L)
         require(sha256.matches(Regex("[a-fA-F0-9]{64}")))
         val uri = URI(url)
@@ -12,6 +13,7 @@ internal data class AppRelease(val version: String, val code: Long, val minSdk: 
         require(uri.userInfo == null && uri.query == null && uri.fragment == null)
         require(uri.rawPath == "/salom/salom-$version.apk" || uri.rawPath == "/salom/salom-latest.apk")
     }
+    val displayVersion: String get() = version + if (displayName.isBlank()) "" else " $displayName"
 }
 
 internal enum class ReleaseRelation { CURRENT, NEWER_AVAILABLE, LOCAL_AHEAD, INCOMPATIBLE }

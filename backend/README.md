@@ -1,6 +1,6 @@
 # Salom directory and messaging API
 
-Purpose: username lookup and authenticated text conversations across Android installations. This service is independent of the APK page and existing applications on the VPS.
+Purpose: username lookup and authenticated messaging for Android and Windows SALOM clients. SQLite remains available for local development and the legacy VPS; the new VPS uses a clean PostgreSQL database and private Redis instance.
 
 | Endpoint (prefix `/salom/api`) | Authentication | Behavior |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ Purpose: username lookup and authenticated text conversations across Android ins
 
 Public response fields: id, name, username, is_active. No phone, email, token or key hash is returned. The server never receives the address book.
 
-Production still stores messages in SQLite and transfers them over HTTPS/WebSocket; they are not end-to-end encrypted. Sender identity comes from the installation key, never a request-supplied sender ID. Android uses WebSocket events while connected and falls back to HTTP history synchronization after disconnects. FCM remains the background notification path.
+The new-VPS unit sets `SALOM_REQUIRE_POSTGRES=1` and `SALOM_REQUIRE_REDIS=1`, so production fails closed if either service is missing. PostgreSQL retains message history until explicit user deletion; each client synchronizes by monotonically increasing message IDs. Redis supplies shared per-minute rate limits, short-lived public-profile cache, 45-second presence TTLs, and Pub/Sub fan-out for WebSocket events between Uvicorn workers. Keep Uvicorn bound to loopback and expose it only through Nginx. SQLite remains the test/development backend. Messages are not end-to-end encrypted. Sender identity comes from the authenticated session, never a request-supplied sender ID. Android uses WebSocket events while connected and HTTP history synchronization after disconnects; FCM remains the background notification path.
 
 Server FCM credentials live at `/etc/salom-api/firebase-admin.json`, root-owned and group-readable only by `salom-api` (0640 inside a 0750 directory). They never enter the APK or Git. Android's `google-services.json` is client configuration, not a server private key. Install the pinned Python dependencies before deploying; `push.py` is deployed alongside `app.py`.
 
@@ -27,7 +27,7 @@ Each new message inserts an outbox row in the same SQLite transaction. The singl
 
 `qa_messaging_live.py`, `qa_auth_live.py`, and `qa_media_live.py` use public HTTPS and create/delete synthetic production-side QA fixtures. Run them only as deliberate live QA tasks; they are intentionally named `qa_*` so `unittest discover -p 'test_*.py'` cannot execute them. `ui_messaging_probe.py create @username` creates a temporary controlled peer that replies only to the exact QA text `Salom050check`. Run its `cleanup` command after Android testing to remove that peer and cascade-delete its messages. No real user's conversation is used by these tests.
 
-`deploy.py` is a read-only release-bundle preflight. It verifies required files, Python syntax and PostgreSQL driver declarations; it does not modify the VPS, reload Nginx or restart services. Do not use it as a deployment script. A production rollout needs an independently reviewed sequence that backs up the SQLite database and media, installs all runtime modules and dependencies, validates the Nginx WebSocket location, runs health checks and has a tested rollback. Production changes remain subject to separate approval.
+`initialize_postgres.py` creates the new-VPS schema only when `SALOM_DATABASE_URL` points to the explicitly named empty database `salom_prod`; it refuses any non-empty schema and imports no SQLite rows. `deploy.py` is a read-only release-bundle preflight. It verifies required files, Python syntax and PostgreSQL driver declarations; it does not modify the VPS, reload Nginx or restart services. A production rollout still needs a fresh off-server encrypted backup and a tested rollback.
 
 `../ops/deploy.sh` is the prepared new-host release wrapper. Install it root-owned at `/usr/local/sbin/salom-deploy` and allow only that command to the `salom-deploy` user. It requires a clean private Git checkout and a full commit SHA reachable from `origin/main`; it builds a release from Git archive, swaps the application symlink, restarts the API and verifies `/health`. It does not run database migrations or change DNS. The target must already have its protected environment file, PostgreSQL schema/data, service unit and media directory prepared.
 

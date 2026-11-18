@@ -41,8 +41,8 @@ internal fun UpdateCard(updater: AppUpdater) {
                     Text("Проверено на сервере в $time", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick = { updater.check(force = true) }) { Text("Проверить ещё раз") }
                 }
-                UpdateStatus.LocalAhead -> {
-                    Text("Установлена версия новее опубликованной", fontSize = 13.sp)
+                is UpdateStatus.LocalAhead -> {
+                    Text("На сервере пока опубликована версия ${value.release.displayVersion}. Эта сборка ещё не опубликована для обновления.", fontSize = 13.sp)
                     TextButton(onClick = { updater.check(force = true) }) { Text("Проверить ещё раз") }
                 }
                 is UpdateStatus.Failed -> {
@@ -74,7 +74,7 @@ internal fun UpdateCard(updater: AppUpdater) {
 
 @Composable
 private fun ReleaseDetails(release: AppRelease) {
-    Text("Доступна версия ${release.version}", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    Text("Доступна версия ${release.displayVersion}", fontWeight = FontWeight.Medium, fontSize = 14.sp)
     Text(String.format(java.util.Locale.getDefault(), "%.2f МБ", release.size / 1_000_000.0), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     release.notes.forEach { Text("• $it", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }

@@ -1,8 +1,8 @@
 [Unit]
 Description=SALOM Messenger API
 Wants=network-online.target
-After=network-online.target postgresql.service
-Requires=postgresql.service
+After=network-online.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -10,16 +10,17 @@ StartLimitBurst=5
 User=salom-api
 Group=salom-api
 WorkingDirectory=/opt/salom-api/current/backend
-EnvironmentFile=/etc/salom-api/salom-api.env
+EnvironmentFile=/etc/salom-api/environment
 Environment=SALOM_DB=/var/lib/salom-api/directory.sqlite3
-Environment=SALOM_MEDIA=/var/lib/salom-api/attachments
+Environment=SALOM_MEDIA=/srv/salom-data/media
 Environment=SALOM_DB_POOL_SIZE=4
 Environment=SALOM_REQUIRE_POSTGRES=1
+Environment=SALOM_REQUIRE_REDIS=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=GOOGLE_APPLICATION_CREDENTIALS=/etc/salom-api/firebase-admin.json
 StateDirectory=salom-api
 StateDirectoryMode=0700
-ExecStart=/opt/salom-api/current/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 18731 --workers 1 --limit-concurrency 24 --timeout-keep-alive 5 --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
+ExecStart=/opt/salom-api/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 18731 --workers 1 --limit-concurrency 24 --timeout-keep-alive 5 --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
@@ -42,7 +43,7 @@ RestrictSUIDSGID=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadWritePaths=/var/lib/salom-api
+ReadWritePaths=/var/lib/salom-api /srv/salom-data/media
 
 [Install]
 WantedBy=multi-user.target

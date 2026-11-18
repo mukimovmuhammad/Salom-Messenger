@@ -63,6 +63,7 @@ class PushDispatcher:
             self.wake.clear()
 
     def deliver_one(self):
+        if self.deliver_call_one(): return True
         with self.connect() as db:
             job = db.execute('SELECT * FROM push_jobs WHERE state=? AND next_at<=? ORDER BY message_id LIMIT 1', ('pending', time.time())).fetchone()
             if not job: return False
@@ -103,4 +104,55 @@ class PushDispatcher:
                        ('failed' if permanent or attempts >= 8 else 'pending', attempts,
                         time.time() + min(5 * 3 ** (attempts - 1), 3600), code, message['id']))
         log.warning('FCM delivery not accepted (%s), attempt %d', code, attempts)
+        return True
+
+    def deliver_call_one(self):
+        with self.connect() as db:
+            now = time.time()
+            expired = db.execute("SELECT c.id FROM call_sessions c JOIN call_push_jobs j ON j.call_id=c.id WHERE c.state='ringing' AND c.expires<=? AND j.state='sent' ORDER BY c.expires LIMIT 1", (now,)).fetchone()
+            if expired:
+                db.execute("UPDATE call_sessions SET state='missed',updated=? WHERE id=? AND state='ringing'", (now,expired['id']))
+                db.execute("UPDATE call_push_jobs SET state='missed_pending',attempts=0,next_at=0 WHERE call_id=?", (expired['id'],))
+            job = db.execute("SELECT * FROM call_push_jobs WHERE state IN ('pending','missed_pending') AND next_at<=? ORDER BY next_at LIMIT 1", (now,)).fetchone()
+            if not job: return False
+            call = db.execute('SELECT * FROM call_sessions WHERE id=?', (job['call_id'],)).fetchone()
+            missed = job['state'] == 'missed_pending'
+            if not call or (not missed and (call['state'] != 'ringing' or call['expires'] <= now)):
+                db.execute("UPDATE call_push_jobs SET state='skipped' WHERE call_id=?", (job['call_id'],))
+                return True
+            target = db.execute('SELECT token FROM push_tokens WHERE profile_id=?', (call['callee_id'],)).fetchone()
+            caller = db.execute('SELECT name FROM profiles WHERE id=?', (call['caller_id'],)).fetchone()
+            if not target or not caller:
+                db.execute("UPDATE call_push_jobs SET state='skipped' WHERE call_id=?", (job['call_id'],))
+                return True
+            token = target['token']
+            if missed:
+                count = db.execute("SELECT COUNT(*) AS count FROM call_sessions WHERE callee_id=? AND state='missed' AND seen_at IS NULL", (call['callee_id'],)).fetchone()['count']
+                data = {'type':'missed_call','call_id':call['id'],'caller_id':call['caller_id'],'caller_name':caller['name'][:80],'unread_count':str(count)}
+            else:
+                data = {'type': 'incoming_call', 'call_id': call['id'], 'caller_id': call['caller_id'], 'caller_name': caller['name'][:80]}
+        code = 'NETWORK'
+        permanent = False
+        invalid_token = False
+        try:
+            response = self.session.post('https://fcm.googleapis.com/v1/projects/' + self.project + '/messages:send',
+                json={'message': {'token': token, 'data': data,
+                    'android': {'priority': 'HIGH', 'ttl': '45s' if not missed else '86400s', 'restricted_package_name': 'com.mukimov.salom'}}}, timeout=8)
+            if response.status_code == 200:
+                with self.connect() as db: db.execute("UPDATE call_push_jobs SET state=?,last_error=NULL WHERE call_id=?", ('missed_sent' if missed else 'sent',call['id']))
+                return True
+            error = response.json().get('error', {})
+            codes = [detail.get('errorCode') for detail in error.get('details', []) if isinstance(detail, dict)]
+            invalid_token = 'UNREGISTERED' in codes
+            code = str(response.status_code) + ':' + str(error.get('status', 'UNKNOWN'))
+            permanent = invalid_token or response.status_code in (400, 404)
+        except Exception:
+            pass
+        attempts = job['attempts'] + 1
+        with self.connect() as db:
+            if invalid_token: db.execute('DELETE FROM push_tokens WHERE profile_id=? AND token=?', (call['callee_id'], token))
+            db.execute('UPDATE call_push_jobs SET state=?,attempts=?,next_at=?,last_error=? WHERE call_id=?',
+                ('failed' if permanent or attempts >= 3 else ('missed_pending' if missed else 'pending'), attempts,
+                 time.time() + min(2 ** attempts, 8), code, call['id']))
+        log.warning('FCM call push not accepted (%s), attempt %d', code, attempts)
         return True

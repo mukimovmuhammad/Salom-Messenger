@@ -1,7 +1,9 @@
 """Salom profiles, messaging and verified accounts. Address books are never collected."""
 import hashlib
 import hmac
+import base64
 import asyncio
+import json
 import os
 import re
 import sqlite3
@@ -17,6 +19,8 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
+from redis import Redis as SyncRedis
+from redis.asyncio import Redis as AsyncRedis
 import media
 from database import INTEGRITY_ERRORS, PostgresConnection, create_pool
 from realtime import RealtimeHub
@@ -26,6 +30,9 @@ from monitoring import RuntimeMetrics, RuntimeReporter
 
 DB = Path(os.environ.get('SALOM_DB', '/var/lib/salom-api/directory.sqlite3'))
 PG_DSN = os.environ.get('SALOM_DATABASE_URL', '').strip()
+REDIS_URL = os.environ.get('REDIS_URL', '').strip()
+redis_sync = None
+redis_async = None
 pg_pool = None
 pg_pool_lock = threading.Lock()
 USERNAME = re.compile(r'^[A-Za-z][A-Za-z0-9_]{3,23}$')
@@ -94,6 +101,18 @@ def initialize():
             'push_jobs': 'message_id,state,attempts,next_at,last_error', 'registrations': 'ip,at', 'auth_limits': 'key,at',
         }
         with connect() as db:
+            # Additive call schema; safe to apply on existing PostgreSQL installs.
+            db.executescript('''CREATE TABLE IF NOT EXISTS call_sessions (
+              id TEXT PRIMARY KEY, caller_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+              callee_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+              state TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL,
+              expires DOUBLE PRECISION NOT NULL, ended_by TEXT, seen_at DOUBLE PRECISION);
+              CREATE INDEX IF NOT EXISTS call_sessions_callee ON call_sessions(callee_id,state,created);
+              CREATE TABLE IF NOT EXISTS call_push_jobs (
+              call_id TEXT PRIMARY KEY REFERENCES call_sessions(id) ON DELETE CASCADE,
+              state TEXT NOT NULL DEFAULT 'pending', attempts BIGINT NOT NULL DEFAULT 0,
+              next_at DOUBLE PRECISION NOT NULL DEFAULT 0, last_error TEXT);
+              CREATE INDEX IF NOT EXISTS call_push_jobs_pending ON call_push_jobs(state,next_at);''')
             for table, columns in required.items():
                 db.execute(f'SELECT {columns} FROM {table} LIMIT 0')
         return
@@ -128,6 +147,17 @@ def initialize():
           state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
           next_at REAL NOT NULL DEFAULT 0, last_error TEXT);
         CREATE INDEX IF NOT EXISTS push_jobs_pending ON push_jobs(state,next_at);
+        CREATE TABLE IF NOT EXISTS call_sessions (
+          id TEXT PRIMARY KEY, caller_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          callee_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          state TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
+          expires REAL NOT NULL, ended_by TEXT, seen_at REAL);
+        CREATE INDEX IF NOT EXISTS call_sessions_callee ON call_sessions(callee_id,state,created);
+        CREATE TABLE IF NOT EXISTS call_push_jobs (
+          call_id TEXT PRIMARY KEY REFERENCES call_sessions(id) ON DELETE CASCADE,
+          state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+          next_at REAL NOT NULL DEFAULT 0, last_error TEXT);
+        CREATE INDEX IF NOT EXISTS call_push_jobs_pending ON call_push_jobs(state,next_at);
         ''')
         profile_columns = {row['name'] for row in db.execute('PRAGMA table_info(profiles)')}
         if 'online_at' not in profile_columns: db.execute('ALTER TABLE profiles ADD COLUMN online_at REAL NOT NULL DEFAULT 0')
@@ -155,6 +185,17 @@ async def lifespan(app):
     initialize()
     app.state.realtime = RealtimeHub()
     app.state.event_loop = asyncio.get_running_loop()
+    if os.environ.get('SALOM_REQUIRE_REDIS') == '1' and not REDIS_URL:
+        raise RuntimeError('REDIS_URL is required on this server')
+    relay_task = None
+    if REDIS_URL:
+        global redis_sync, redis_async
+        redis_sync = SyncRedis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
+        redis_async = AsyncRedis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
+        await redis_async.ping()
+        app.state.redis_sync = redis_sync
+        app.state.redis_async = redis_async
+        relay_task = asyncio.create_task(redis_event_relay(app), name='salom-redis-event-relay')
     app.state.runtime_metrics = RuntimeMetrics()
     reporter = RuntimeReporter(app.state.runtime_metrics, lambda: app.state.realtime.connection_count)
     try:
@@ -163,11 +204,43 @@ async def lifespan(app):
         app.state.push.start()
         yield
     finally:
+        if relay_task:
+            relay_task.cancel()
+            try: await relay_task
+            except asyncio.CancelledError: pass
+        if redis_async:
+            await redis_async.aclose()
+            redis_async = None
+        if redis_sync:
+            redis_sync.close()
+            redis_sync = None
         push = getattr(app.state, 'push', None)
         if push is not None:
             push.stop()
         reporter.stop()
         close_pg_pool()
+
+async def redis_event_relay(application):
+    """Fan out durable API events to each worker's local WebSocket hub."""
+    channel = 'salom:realtime:v1'
+    while True:
+        try:
+            async with application.state.redis_async.pubsub() as pubsub:
+                await pubsub.subscribe(channel)
+                async for item in pubsub.listen():
+                    if item.get('type') != 'message': continue
+                    try:
+                        envelope = json.loads(item['data'])
+                        profile_id, event = envelope['profile_id'], envelope['event']
+                        if isinstance(profile_id, str) and isinstance(event, dict):
+                            await application.state.realtime.publish(profile_id, event)
+                    except (KeyError, TypeError, ValueError):
+                        continue
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Reconnect without logging any message contents or identifiers.
+            await asyncio.sleep(1)
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -177,7 +250,16 @@ def publish_realtime(profile_id: str, event: dict) -> None:
     if hub is None or loop is None or loop.is_closed():
         return
     def schedule_publish():
-        asyncio.create_task(hub.publish(profile_id, event))
+        async def send():
+            client = getattr(app.state, 'redis_async', None)
+            if client is not None:
+                try:
+                    await client.publish('salom:realtime:v1', json.dumps({'profile_id': profile_id, 'event': event}, separators=(',', ':')))
+                    return
+                except Exception:
+                    pass
+            await hub.publish(profile_id, event)
+        asyncio.create_task(send())
     loop.call_soon_threadsafe(schedule_publish)
 
 @app.websocket('/ws')
@@ -226,10 +308,30 @@ def public(row):
 def with_presence(row):
     result = public(row)
     seen = float(row['online_at'] or 0)
-    result.update({'is_online': seen >= time.time() - 45, 'last_seen': seen or None})
+    is_online = seen >= time.time() - 45
+    client = redis_sync
+    if client is not None:
+        try: is_online = bool(client.exists('salom:presence:' + str(row['id'])))
+        except Exception: pass
+    result.update({'is_online': is_online, 'last_seen': seen or None})
     return result
 
 def throttle(key, limit=180):
+    client = redis_sync
+    if client is not None:
+        try:
+            hashed = hashlib.sha256(str(key).encode()).hexdigest()
+            bucket = f'salom:rate:{hashed}:{int(time.time() // 60)}'
+            pipe = client.pipeline(transaction=True)
+            pipe.incr(bucket)
+            pipe.expire(bucket, 120)
+            count, _ = pipe.execute()
+            if count > limit: raise HTTPException(429, 'Слишком много запросов. Попробуй через минуту')
+            return
+        except HTTPException: raise
+        except Exception:
+            if os.environ.get('SALOM_REQUIRE_REDIS') == '1':
+                raise HTTPException(503, 'Ограничитель запросов временно недоступен')
     now = time.monotonic()
     with rate_lock:
         window = rates[key]
@@ -248,7 +350,13 @@ class ProfileInput(BaseModel):
 @app.get('/health')
 def health():
     with connect() as db: db.execute('SELECT 1').fetchone()
-    return {'status': 'ok', 'service': 'salom-directory', 'push_configured': app.state.push.configured}
+    redis_ready = False
+    if redis_sync is not None:
+        try: redis_ready = bool(redis_sync.ping())
+        except Exception: pass
+    if os.environ.get('SALOM_REQUIRE_REDIS') == '1' and not redis_ready:
+        raise HTTPException(503, 'Кэш временно недоступен')
+    return {'status': 'ok', 'service': 'salom-directory', 'push_configured': app.state.push.configured, 'redis_ready': redis_ready}
 
 @app.put('/profile')
 def profile(body: ProfileInput, request: Request, authorization: str | None = Header(default=None)):
@@ -448,8 +556,7 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
     text = body.text.strip()
     if not text and not body.attachment_id: raise HTTPException(400, 'Сообщение не может быть пустым')
     if body.recipient_id == me['id']: raise HTTPException(400, 'Для личных заметок используй Избранное')
-    # Per-account sliding window; the single-worker service shares this counter
-    # across all API routes. Move this limiter to Redis before adding workers.
+    # Redis shares per-account request limits across the API workers.
     throttle('send-message:' + me['id'], limit=60)
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -482,6 +589,101 @@ class PushTokenInput(BaseModel):
     token: str = Field(min_length=20, max_length=4096, pattern=r'^[A-Za-z0-9_:\-]+$')
     enabled: bool = True
 
+class CallCreateInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    peer_id: str = Field(min_length=36, max_length=36)
+
+@app.get('/calls/config')
+def call_config(authorization: str | None = Header(default=None)):
+    current_profile(authorization)
+    servers = [{'urls':['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']}]
+    urls = [item.strip() for item in os.environ.get('SALOM_TURN_URLS','').split(',') if item.strip()]
+    secret = os.environ.get('SALOM_TURN_SECRET','')
+    if urls and secret:
+        expiry = int(time.time()) + 3600
+        username = f'{expiry}:salom'
+        credential = base64.b64encode(hmac.new(secret.encode(), username.encode(), hashlib.sha1).digest()).decode()
+        servers.append({'urls':urls,'username':username,'credential':credential})
+    return {'ice_servers':servers}
+
+class CallStateInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: str = Field(pattern=r'^(accept|decline|cancel|end|missed)$')
+
+class CallSignalInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    kind: str = Field(pattern=r'^(offer|answer|ice)$')
+    payload: dict = Field()
+
+@app.post('/calls')
+def create_call(body: CallCreateInput, authorization: str | None = Header(default=None)):
+    me = current_profile(authorization)
+    try: peer_id = str(UUID(body.peer_id))
+    except ValueError: raise HTTPException(422, 'Неверный профиль')
+    if peer_id == me['id']: raise HTTPException(400, 'Нельзя позвонить себе')
+    now = time.time(); call_id = str(uuid.uuid4())
+    with connect() as db:
+        peer = db.execute('SELECT id FROM profiles WHERE id=? AND is_active=1', (peer_id,)).fetchone()
+        if not peer: raise HTTPException(404, 'Профиль недоступен')
+        active = db.execute("SELECT 1 FROM call_sessions WHERE state IN ('ringing','accepted') AND expires>? AND (caller_id IN (?,?) OR callee_id IN (?,?)) LIMIT 1", (now, me['id'],peer_id,me['id'],peer_id)).fetchone()
+        if active: raise HTTPException(409, 'У одного из участников уже идёт звонок')
+        db.execute('DELETE FROM call_sessions WHERE created<?', (now - 30 * 86400,))
+        db.execute('INSERT INTO call_sessions(id,caller_id,callee_id,state,created,updated,expires) VALUES(?,?,?,\'ringing\',?,?,?)', (call_id,me['id'],peer_id,now,now,now+45))
+        db.execute('INSERT INTO call_push_jobs(call_id) VALUES(?)', (call_id,))
+        caller_name = me['name']
+    publish_realtime(peer_id, {'type':'call_invite','peer_id':me['id'],'call_id':call_id,'caller_name':caller_name,'expires_at':now+45})
+    dispatcher = getattr(app.state, 'push', None)
+    if dispatcher: dispatcher.wake.set()
+    return {'call_id':call_id,'state':'ringing','expires_at':now+45}
+
+@app.post('/calls/{call_id}/state')
+def update_call(call_id: str, body: CallStateInput, authorization: str | None = Header(default=None)):
+    me = current_profile(authorization)
+    try: call_id = str(UUID(call_id))
+    except ValueError: raise HTTPException(404, 'Звонок не найден')
+    now = time.time()
+    with connect() as db:
+        call = db.execute('SELECT * FROM call_sessions WHERE id=?', (call_id,)).fetchone()
+        if not call or me['id'] not in (call['caller_id'], call['callee_id']): raise HTTPException(404, 'Звонок не найден')
+        state = call['state']; action = body.action
+        if state == 'ringing' and call['expires'] <= now: state = 'missed'
+        if action == 'accept' and me['id'] == call['callee_id'] and state == 'ringing': state = 'accepted'
+        elif action == 'decline' and me['id'] == call['callee_id'] and state == 'ringing': state = 'declined'
+        elif action == 'cancel' and me['id'] == call['caller_id'] and state == 'ringing': state = 'cancelled'
+        elif action == 'end' and state in ('accepted','ringing'): state = 'ended'
+        elif action == 'missed' and me['id'] == call['callee_id'] and state == 'missed': state = 'missed'
+        else: raise HTTPException(409, 'Это действие уже недоступно')
+        db.execute('UPDATE call_sessions SET state=?,updated=?,ended_by=? WHERE id=?', (state,now,me['id'] if state in ('declined','cancelled','ended','missed') else None,call_id))
+        peer_id = call['callee_id'] if me['id'] == call['caller_id'] else call['caller_id']
+    publish_realtime(peer_id, {'type':'call_state','peer_id':me['id'],'call_id':call_id,'state':state})
+    return {'call_id':call_id,'state':state}
+
+@app.post('/calls/{call_id}/signal')
+def signal_call(call_id: str, body: CallSignalInput, authorization: str | None = Header(default=None)):
+    me = current_profile(authorization)
+    try: call_id = str(UUID(call_id))
+    except ValueError: raise HTTPException(404, 'Звонок не найден')
+    import json
+    if len(json.dumps(body.payload, separators=(',',':'))) > 12000: raise HTTPException(413, 'Сигнал слишком большой')
+    with connect() as db:
+        call = db.execute('SELECT * FROM call_sessions WHERE id=?', (call_id,)).fetchone()
+        if not call or me['id'] not in (call['caller_id'],call['callee_id']): raise HTTPException(404, 'Звонок не найден')
+        if call['expires'] < time.time() or call['state'] not in ('ringing','accepted'): raise HTTPException(409, 'Звонок уже завершён')
+        if body.kind == 'offer' and (me['id'] != call['caller_id'] or call['state'] not in ('ringing','accepted')): raise HTTPException(403, 'Offer разрешён только звонящему')
+        if body.kind == 'answer' and (me['id'] != call['callee_id'] or call['state'] != 'accepted'): raise HTTPException(403, 'Answer разрешён только принявшему звонок')
+        peer_id = call['callee_id'] if me['id'] == call['caller_id'] else call['caller_id']
+    publish_realtime(peer_id, {'type':'call_signal','peer_id':me['id'],'call_id':call_id,'kind':body.kind,'payload':body.payload})
+    return {'relayed': True}
+
+@app.get('/calls/missed')
+def missed_calls(authorization: str | None = Header(default=None)):
+    me = current_profile(authorization); now = time.time()
+    with connect() as db:
+        db.execute("UPDATE call_sessions SET state='missed',updated=? WHERE callee_id=? AND state='ringing' AND expires<=?", (now,me['id'],now))
+        count = db.execute("SELECT COUNT(*) AS count FROM call_sessions WHERE callee_id=? AND state='missed' AND seen_at IS NULL", (me['id'],)).fetchone()['count']
+        db.execute("UPDATE call_sessions SET seen_at=? WHERE callee_id=? AND state='missed' AND seen_at IS NULL", (now,me['id']))
+    return {'unread_count':count}
+
 @app.put('/push-token')
 def register_push(body: PushTokenInput, authorization: str | None = Header(default=None)):
     me = current_profile(authorization)
@@ -499,10 +701,21 @@ def register_push(body: PushTokenInput, authorization: str | None = Header(defau
 @app.get('/profiles/{peer_id}')
 def get_profile(peer_id: str, authorization: str | None = Header(default=None)):
     current_profile(authorization)
+    cache = redis_sync
+    if cache is not None:
+        try:
+            cached = cache.get('salom:cache:profile:' + peer_id)
+            if cached: return with_presence(json.loads(cached))
+        except Exception:
+            pass
     with connect() as db:
         row = db.execute('SELECT * FROM profiles WHERE id=? AND is_active=1', (peer_id,)).fetchone()
         if not row: raise HTTPException(404, 'Профиль недоступен')
-        return with_presence(row)
+        result = dict(row)
+        if cache is not None:
+            try: cache.setex('salom:cache:profile:' + peer_id, 20, json.dumps({key: result.get(key) for key in ('id','name','username','is_active','avatar_url','online_at')}, separators=(',', ':')))
+            except Exception: pass
+        return with_presence(result)
 
 @app.post('/presence')
 def heartbeat(authorization: str | None = Header(default=None)):
@@ -510,6 +723,9 @@ def heartbeat(authorization: str | None = Header(default=None)):
     now = time.time()
     with connect() as db:
         db.execute('UPDATE profiles SET online_at=? WHERE id=?', (now, me['id']))
+    if redis_sync is not None:
+        try: redis_sync.setex('salom:presence:' + me['id'], 45, str(now))
+        except Exception: pass
     return {'online': True, 'at': now}
 
 class TypingInput(BaseModel):

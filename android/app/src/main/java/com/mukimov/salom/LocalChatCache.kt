@@ -188,7 +188,7 @@ internal abstract class LocalChatDatabase : RoomDatabase() {
             ).addMigrations(MIGRATION_1_2).build().also { instance = it }
         }
 
-        private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+        internal val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
             override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
                 database.execSQL("CREATE TABLE IF NOT EXISTS queued_messages (clientId TEXT NOT NULL PRIMARY KEY, peerId TEXT NOT NULL, text TEXT NOT NULL, createdAt INTEGER NOT NULL, attachmentJson TEXT, replyToId INTEGER, replyAuthor TEXT, replyPreview TEXT)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_queued_messages_peerId_createdAt ON queued_messages(peerId, createdAt)")

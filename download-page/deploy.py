@@ -5,11 +5,23 @@ from pathlib import Path
 import datetime
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 
 incoming = Path('/tmp/salom-deploy')
-apk = incoming / 'salom-0.15.0.apk'
+release_input = json.loads((incoming / 'release.json').read_text(encoding='utf-8'))
+version = release_input.get('version', '')
+display_name = release_input.get('displayName', '')
+version_code = release_input.get('versionCode')
+min_sdk = release_input.get('minSdk', 24)
+release_notes = release_input.get('releaseNotes', [])
+assert isinstance(version, str) and re.fullmatch(r'\d+\.\d+\.\d+', version)
+assert isinstance(display_name, str) and len(display_name) < 24 and re.fullmatch(r'[A-Za-z0-9 -]*', display_name)
+assert isinstance(version_code, int) and version_code > 0
+assert isinstance(min_sdk, int) and 24 <= min_sdk <= 100
+assert isinstance(release_notes, list) and len(release_notes) <= 5 and all(isinstance(note, str) and len(note) <= 240 for note in release_notes)
+apk = incoming / f'salom-{version}.apk'
 assert apk.is_file() and apk.stat().st_size > 100_000
 assert (incoming / 'index.html').is_file()
 config = Path('/etc/nginx/sites-available/ryadom')
@@ -24,6 +36,13 @@ target.mkdir(parents=True, exist_ok=True)
 for filename in ('salom-latest.apk', 'version.json'):
     if (target / filename).exists(): shutil.copy2(target / filename, backup / filename)
 sha256 = hashlib.sha256(apk.read_bytes()).hexdigest()
+old_metadata_path = target / 'version.json'
+if old_metadata_path.is_file():
+    old_metadata = json.loads(old_metadata_path.read_text(encoding='utf-8'))
+    old_code = old_metadata.get('versionCode', 0)
+    assert version_code >= old_code, 'Published versionCode must never go backwards'
+    if version_code == old_code:
+        assert version == old_metadata.get('version') and sha256 == old_metadata.get('sha256'), 'A published build is immutable; use a higher versionCode for any new APK'
 if (target / apk.name).exists():
     assert hashlib.sha256((target / apk.name).read_bytes()).hexdigest() == sha256, 'A published version must never change bytes'
 for filename in (apk.name, 'salom-latest.apk'):
@@ -31,8 +50,8 @@ for filename in (apk.name, 'salom-latest.apk'):
     shutil.copy2(apk, temporary)
     temporary.chmod(0o644)
     temporary.replace(target / filename)
-metadata = {'version': '0.15.0', 'displayName': 'Real-Time', 'versionCode': 19, 'minSdk': 24, 'downloadUrl': 'https://mukimov.site/salom/' + apk.name, 'size': apk.stat().st_size, 'sha256': sha256,
-            'releaseNotes': ['Real-Time: открытые чаты получают сообщения, набор текста, статусы и изменения через WebSocket', 'При потере соединения включается HTTP-синхронизация и WebSocket переподключается', 'Android-токен переносится в Android Keystore', 'Предыдущие сообщения, вложения и FCM-уведомления остаются совместимыми']}
+metadata = {'version': version, 'displayName': display_name, 'versionCode': version_code, 'minSdk': min_sdk, 'downloadUrl': 'https://mukimov.site/salom/' + apk.name, 'size': apk.stat().st_size, 'sha256': sha256,
+            'releaseNotes': release_notes}
 for file in target.iterdir():
     if file.is_file(): file.chmod(0o644)
 new_config = config.read_text()
@@ -45,7 +64,7 @@ if marker in new_config:
 if marker not in new_config:
     routes = marker
     for filename in sorted(file.name for file in target.glob('salom-*.apk')):
-        download_name = 'salom-0.15.0.apk' if filename == 'salom-latest.apk' else filename
+        download_name = apk.name if filename == 'salom-latest.apk' else filename
         routes += f'''    location = /salom/{filename} {{
         alias /var/www/salom/{filename};
         default_type application/vnd.android.package-archive;

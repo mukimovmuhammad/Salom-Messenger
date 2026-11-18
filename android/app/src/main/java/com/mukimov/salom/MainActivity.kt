@@ -62,23 +62,32 @@ internal val Ink = Color(0xFF25241F)
 private val Soft = Color(0xFFF5F5F3)
 internal data class Person(val id: String, val name: String, val initials: String, val color: Color, val preview: String, val username: String = "", val avatarUrl: String = "")
 internal data class Message(val text: String, val mine: Boolean, val time: String = "", val remoteId: Long = 0, val attachment: Attachment? = null, val receipt: String = "sent", val replyToId: Long? = null, val replyAuthor: String? = null, val replyPreview: String? = null, val edited: Boolean = false, val locationId: String? = null)
+internal data class IncomingCallIntent(val callId: String, val peerId: String, val peerName: String, val action: String? = null)
 private val savedPerson = Person("saved", "Избранное", "★", Yellow, "Сообщения и заметки для себя")
 
 class MainActivity : ComponentActivity() {
     private val updater by lazy { androidx.lifecycle.ViewModelProvider(this)[AppUpdater::class.java] }
     private var notificationPeer by mutableStateOf<String?>(null)
+    private var incomingCall by mutableStateOf<IncomingCallIntent?>(null)
     @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         notificationPeer = intent.getStringExtra("peer_id")
+        incomingCall = readCallIntent(intent)
         enableEdgeToEdge()
         PushNotifications.createChannel(this)
-        setContent { SalomApp(this, updater, notificationPeer) { notificationPeer = null } }
+        setContent { SalomApp(this, updater, notificationPeer, incomingCall, { notificationPeer = null }) { incomingCall = null } }
     }
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         notificationPeer = intent.getStringExtra("peer_id")
+        incomingCall = readCallIntent(intent)
+    }
+
+    private fun readCallIntent(intent: android.content.Intent) = intent.getStringExtra("incoming_call_id")?.let { callId ->
+        val peerId = intent.getStringExtra("incoming_call_peer") ?: return@let null
+        IncomingCallIntent(callId, peerId, intent.getStringExtra("incoming_call_name") ?: "Входящий звонок", intent.getStringExtra("incoming_call_action"))
     }
     override fun onResume() {
         super.onResume()
@@ -123,7 +132,7 @@ internal class Store(context: Context) {
 }
 
 @Composable
-private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: String?, onNotificationHandled: () -> Unit) {
+private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: String?, incomingCall: IncomingCallIntent?, onNotificationHandled: () -> Unit, onCallIntentHandled: () -> Unit) {
     var credentialVersion by remember { mutableIntStateOf(0) }
     val directory = remember(credentialVersion) { DirectoryClient(context) }
     val store = remember { Store(context) }
@@ -159,6 +168,9 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
             onNotificationHandled()
         }
     }
+    LaunchedEffect(incomingCall, signedIn) {
+        incomingCall?.let { call -> activeChat = Person(call.peerId, call.peerName, call.peerName.take(1).uppercase(), Yellow, "Звонок", avatarUrl = "") }
+    }
     val accounts = remember(profileVersion, signedIn) { listOf(SalomAccount("self", store.text("name"), store.text("username"), store.text("phone"), is_active = signedIn)) }
     LaunchedEffect(profileVersion, signedIn) {
         if (signedIn) {
@@ -178,6 +190,12 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
                     delay(20_000)
                 }
             }
+        }
+    }
+    LaunchedEffect(signedIn, directory) {
+        if (signedIn) runCatching { directory.missedCalls() }.getOrNull()?.let { count ->
+            if (count > 0) android.widget.Toast.makeText(context,
+                if (count == 1) "Пропущенный звонок" else "Пропущенные звонки ($count)", android.widget.Toast.LENGTH_LONG).show()
         }
     }
     val openAccount: (SalomAccount) -> Unit = { account -> activeChat = if (account.id == "self") savedPerson else Person(account.id, account.name, account.name.take(1).uppercase(), Yellow, "", account.username, account.avatarUrl) }
@@ -207,7 +225,7 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
             } else if (activeChat != null) {
                 BackHandler { activeChat = null }
                 key(activeChat!!.id) {
-                    Conversation(activeChat!!, store, directory, chatWallpaper, { value -> chatWallpaper = value; store.save("chat_wallpaper", value) }) { activeChat = null }
+                    Conversation(activeChat!!, store, directory, chatWallpaper, incomingCall, onCallIntentHandled, { value -> chatWallpaper = value; store.save("chat_wallpaper", value) }) { activeChat = null }
                 }
             } else {
                 Scaffold(containerColor = scheme.background, contentWindowInsets = WindowInsets(0, 0, 0, 0), bottomBar = {

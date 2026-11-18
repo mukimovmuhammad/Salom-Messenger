@@ -30,6 +30,8 @@ TABLES = {
     "auth_limits": ("key", "at"),
     "push_tokens": ("profile_id", "token", "updated"),
     "push_jobs": ("message_id", "state", "attempts", "next_at", "last_error"),
+    "call_sessions": ("id", "caller_id", "callee_id", "state", "created", "updated", "expires", "ended_by", "seen_at"),
+    "call_push_jobs": ("call_id", "state", "attempts", "next_at", "last_error"),
 }
 ORDER_COLUMNS = {
     "profiles": ("id",), "registrations": ("ip", "at"), "attachments": ("id",),
@@ -37,6 +39,7 @@ ORDER_COLUMNS = {
     "message_events": ("id",), "message_hides": ("owner_id", "message_id"),
     "live_locations": ("id",), "accounts": ("profile_id",), "sessions": ("token_hash",), "email_challenges": ("id",),
     "auth_limits": ("key", "at"), "push_tokens": ("profile_id",), "push_jobs": ("message_id",),
+    "call_sessions": ("id",), "call_push_jobs": ("call_id",),
 }
 
 DDL = """
@@ -109,6 +112,17 @@ CREATE TABLE push_jobs (
   state TEXT NOT NULL DEFAULT 'pending', attempts BIGINT NOT NULL DEFAULT 0,
   next_at DOUBLE PRECISION NOT NULL DEFAULT 0, last_error TEXT
 );
+CREATE TABLE call_sessions (
+  id TEXT PRIMARY KEY, caller_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  callee_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  state TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL,
+  expires DOUBLE PRECISION NOT NULL, ended_by TEXT, seen_at DOUBLE PRECISION
+);
+CREATE TABLE call_push_jobs (
+  call_id TEXT PRIMARY KEY REFERENCES call_sessions(id) ON DELETE CASCADE,
+  state TEXT NOT NULL DEFAULT 'pending', attempts BIGINT NOT NULL DEFAULT 0,
+  next_at DOUBLE PRECISION NOT NULL DEFAULT 0, last_error TEXT
+);
 CREATE INDEX registrations_ip ON registrations(ip,at);
 CREATE INDEX attachments_owner ON attachments(owner_id);
 CREATE INDEX messages_pair ON messages(sender_id,recipient_id,id);
@@ -118,6 +132,8 @@ CREATE INDEX sessions_profile ON sessions(profile_id);
 CREATE INDEX email_challenges_email ON email_challenges(email,created);
 CREATE INDEX auth_limits_key ON auth_limits(key,at);
 CREATE INDEX push_jobs_pending ON push_jobs(state,next_at);
+CREATE INDEX call_sessions_callee ON call_sessions(callee_id,state,created);
+CREATE INDEX call_push_jobs_pending ON call_push_jobs(state,next_at);
 """
 
 
@@ -146,19 +162,25 @@ def validate_source(path: Path):
         raise ValueError(f"SQLite integrity check failed: {integrity}")
     found_tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     expected_tables = set(TABLES)
-    if found_tables != expected_tables:
+    optional_tables = {"call_sessions", "call_push_jobs"}
+    if found_tables - expected_tables or expected_tables - found_tables - optional_tables:
         db.close()
         raise ValueError("Unexpected SQLite table set; refusing to omit or invent user data")
+    if ("call_sessions" in found_tables) != ("call_push_jobs" in found_tables):
+        db.close()
+        raise ValueError("Incomplete call schema in SQLite source; refusing an inconsistent migration")
     for table, columns in TABLES.items():
+        if table not in found_tables:
+            continue
         found = tuple(row[1] for row in db.execute(f"PRAGMA table_info({table})"))
         if set(found) != set(columns):
             db.close()
             raise ValueError(f"Unexpected SQLite columns for {table}; refusing to omit or invent fields")
-    return db
+    return db, found_tables
 
 
 def migrate(source_path: Path, dsn: str):
-    source = validate_source(source_path)
+    source, source_tables = validate_source(source_path)
     target = psycopg.connect(dsn)
     try:
         with target.transaction():
@@ -174,9 +196,9 @@ def migrate(source_path: Path, dsn: str):
             for table, columns in TABLES.items():
                 quoted_columns = ",".join(f'"{name}"' for name in columns)
                 ordering = ",".join(f'"{name}"' for name in ORDER_COLUMNS[table])
-                source_cursor = source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}')
+                source_cursor = source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}') if table in source_tables else None
                 insert = f'INSERT INTO "{table}" ({quoted_columns}) VALUES ({",".join("%s" for _ in columns)})'
-                while rows := source_cursor.fetchmany(1000):
+                while source_cursor is not None and (rows := source_cursor.fetchmany(1000)):
                     with target.cursor() as cursor:
                         cursor.executemany(insert, rows)
 
@@ -189,7 +211,7 @@ def migrate(source_path: Path, dsn: str):
             for table, columns in TABLES.items():
                 quoted_columns = ",".join(f'"{name}"' for name in columns)
                 ordering = ",".join(f'"{name}"' for name in ORDER_COLUMNS[table])
-                source_result = digest_rows(source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}'))
+                source_result = digest_rows(source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}')) if table in source_tables else (0, hashlib.sha256().hexdigest())
                 target_result = digest_rows(target.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}'))
                 if source_result != target_result:
                     raise ValueError(f"Count/checksum mismatch for {table}")

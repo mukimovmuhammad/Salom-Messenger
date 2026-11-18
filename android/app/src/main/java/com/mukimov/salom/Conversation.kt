@@ -62,10 +62,18 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.util.UUID
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.os.Build
+import androidx.compose.ui.window.Dialog
+
+private data class CallPresentation(val callId: String, val peerId: String, val peerName: String, val incoming: Boolean, val state: String)
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-internal fun Conversation(person: Person, store: Store, directory: DirectoryClient, wallpaperId: String, onWallpaperChange: (String) -> Unit, onBack: () -> Unit) {
+internal fun Conversation(person: Person, store: Store, directory: DirectoryClient, wallpaperId: String, incomingCall: IncomingCallIntent?, onCallIntentHandled: () -> Unit, onWallpaperChange: (String) -> Unit, onBack: () -> Unit) {
     val saved = person.id == "saved"
     val context = LocalContext.current
     val localCache = remember(context) { LocalChatCache(context) }
@@ -116,6 +124,109 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     val latestOutgoing by rememberUpdatedState(queuedOutgoing)
     val latestSending by rememberUpdatedState(sending)
     val scope = rememberCoroutineScope()
+    var activeCall by remember(person.id) { mutableStateOf<CallPresentation?>(null) }
+    var callEngine by remember(person.id) { mutableStateOf<CallEngine?>(null) }
+    var pendingCallSignals by remember(person.id) { mutableStateOf<List<Pair<String, org.json.JSONObject>>>(emptyList()) }
+    var callMuted by remember { mutableStateOf(false) }
+    var callSpeaker by remember { mutableStateOf(false) }
+    var callError by remember { mutableStateOf<String?>(null) }
+    var pendingOutgoing by remember { mutableStateOf(false) }
+    val callMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val call = activeCall
+        if (granted && call == null && pendingOutgoing) {
+            pendingOutgoing = false
+            scope.launch {
+                try {
+                    val result = directory.createCall(person.id)
+                    activeCall = CallPresentation(result.getString("call_id"), person.id, person.name, false, "ringing")
+                    val engine = CallEngine(context, result.getString("call_id"), person.id, person.name, directory, scope) { state -> activeCall = activeCall?.copy(state = state) }
+                    engine.prepare(); callEngine = engine
+                    if (activeCall?.state == "accepted") { activeCall = activeCall?.copy(state = "connecting"); engine.createOffer() }
+                } catch (failure: Exception) {
+                    activeCall?.let { failed -> activeCall = failed.copy(state = "failed"); scope.launch { runCatching { directory.updateCall(failed.callId, "end") } } }
+                    callError = failure.message ?: "Не удалось начать звонок"; sendError = callError
+                }
+            }
+        } else if (granted && call != null) scope.launch {
+            runCatching {
+                if (call.incoming) { directory.updateCall(call.callId, "accept"); PushNotifications.cancelCall(context, call.callId) }
+                val engine = CallEngine(context, call.callId, call.peerId, call.peerName, directory, scope) { state -> activeCall = activeCall?.copy(state = state) }
+                engine.prepare(); callEngine = engine; callMuted = false; callSpeaker = false
+                activeCall = call.copy(state = if (call.incoming || call.state == "accepted") "connecting" else "ringing")
+                if (!call.incoming && call.state == "accepted") engine.createOffer()
+                val queued = pendingCallSignals; pendingCallSignals = emptyList()
+                queued.forEach { (kind, payload) -> engine.receive(kind, payload) }
+            }.onFailure {
+                callEngine?.close(); callEngine = null
+                activeCall = activeCall?.copy(state = "failed")
+                callError = "Не удалось подключить звонок: ${it.message ?: "проверь интернет"}"
+                scope.launch { runCatching { directory.updateCall(call.callId, "end") } }
+            }
+        } else if (!granted) { pendingOutgoing = false; callError = "Для звонка нужно разрешить доступ к микрофону"; sendError = callError }
+    }
+    fun requestCallMicrophone() = callMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+    fun startOutgoingCall() {
+        if (saved || activeCall != null) return
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingOutgoing = true
+            callMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        scope.launch {
+            try {
+                val result = directory.createCall(person.id)
+                activeCall = CallPresentation(result.getString("call_id"), person.id, person.name, false, "ringing")
+                val engine = CallEngine(context, result.getString("call_id"), person.id, person.name, directory, scope) { state -> activeCall = activeCall?.copy(state = state) }
+                engine.prepare(); callEngine = engine
+                if (activeCall?.state == "accepted") { activeCall = activeCall?.copy(state = "connecting"); engine.createOffer() }
+            } catch (failure: Exception) {
+                activeCall?.let { failed -> activeCall = failed.copy(state = "failed"); scope.launch { runCatching { directory.updateCall(failed.callId, "end") } } }
+                callError = failure.message ?: "Не удалось начать звонок"; sendError = callError
+            }
+        }
+    }
+    fun endCall(action: String) {
+        val call = activeCall ?: return
+        activeCall = null; callEngine?.close(); callEngine = null; pendingCallSignals = emptyList()
+        PushNotifications.cancelCall(context, call.callId)
+        scope.launch {
+            runCatching { directory.updateCall(call.callId, action) }
+            if (action == "missed") runCatching { directory.missedCalls() }.getOrNull()?.takeIf { it > 0 }?.let { count ->
+                android.widget.Toast.makeText(context, if (count == 1) "Пропущенный звонок" else "Пропущенные звонки ($count)", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+        onCallIntentHandled()
+    }
+    LaunchedEffect(incomingCall, person.id) {
+        incomingCall?.takeIf { it.peerId == person.id }?.let { call ->
+            activeCall = CallPresentation(call.callId, call.peerId, call.peerName, true, "incoming")
+            onCallIntentHandled()
+            if (call.action == "accept") requestCallMicrophone()
+            if (call.action == "decline") endCall("decline")
+            if (call.action == "end") endCall("end")
+        }
+    }
+    LaunchedEffect(activeCall?.callId, activeCall?.state) {
+        val call = activeCall ?: return@LaunchedEffect
+        val ringingTimeout = if (call.incoming) call.state == "incoming" else call.state == "ringing"
+        val connectingTimeout = call.state in setOf("connecting", "reconnecting")
+        if (ringingTimeout || connectingTimeout) {
+            delay(if (connectingTimeout) 30_000 else 45_000)
+            if (activeCall?.callId == call.callId && activeCall?.state == call.state) {
+                if (call.incoming && call.state == "incoming") endCall("missed")
+                else endCall(if (call.state == "ringing") "cancel" else "end")
+            }
+        }
+    }
+    DisposableEffect(activeCall?.callId, activeCall?.state) {
+        var ringtone: Ringtone? = null
+        if (activeCall?.state == "incoming") {
+            ringtone = RingtoneManager.getRingtone(context, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
+            if (Build.VERSION.SDK_INT >= 28) ringtone?.isLooping = true
+            ringtone?.play()
+        }
+        onDispose { runCatching { ringtone?.stop() } }
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val listState = rememberLazyListState()
     val busy = sending || preparing || clearing || recording || startingVoice
@@ -336,6 +447,23 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                             "message", "sync" -> retry++
                             "typing" -> peerTyping = event.typing ?: false
                             "presence" -> { peerOnline = event.online ?: false; retry++ }
+                            "call_invite" -> if (event.callId != null && event.peerId == person.id && activeCall == null) {
+                                activeCall = CallPresentation(event.callId, person.id, event.callerName ?: person.name, true, "incoming")
+                            }
+                            "call_state" -> if (event.callId == activeCall?.callId && event.state != null) {
+                                if (event.state == "accepted" && activeCall?.incoming == false) {
+                                    activeCall = activeCall?.copy(state = if (callEngine == null) "accepted" else "connecting")
+                                    callEngine?.createOffer()
+                                } else if (event.state in setOf("declined", "cancelled", "ended", "missed")) {
+                                    PushNotifications.cancelCall(context, event.callId.orEmpty())
+                                    callEngine?.close(); callEngine = null; activeCall = null; onCallIntentHandled()
+                                }
+                            }
+                            "call_signal" -> if (event.callId == activeCall?.callId && event.signalKind != null && event.signalPayload != null) {
+                                val engine = callEngine
+                                if (engine == null) pendingCallSignals = pendingCallSignals + (event.signalKind to event.signalPayload)
+                                else engine.receive(event.signalKind, event.signalPayload)
+                            }
                             "closed", "disconnected" -> { realtimeConnected = false; retry++ }
                         }
                     }
@@ -444,6 +572,9 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         Spacer(Modifier.width(4.dp)); TypingDots()
                     } else Text(if (saved) "Только для тебя" else if (peerOnline) "в сети" else "не в сети", fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1, color = if (peerOnline) Color(0xFF24B566) else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+            if (!saved) Box(Modifier.size(38.dp).clip(CircleShape).background(chatSurface).clickable { startOutgoingCall() }, contentAlignment = Alignment.Center) {
+                Text("☎", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 19.sp)
             }
             Spacer(Modifier.width(4.dp))
             Box {
@@ -633,6 +764,47 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 scope.launch { try { directory.deleteMessage(snapshot.remoteId,true); messages=messages.filterNot { it.remoteId==snapshot.remoteId } }
                     catch(failure:Exception){sendError=(failure as? DirectoryException)?.message ?: "Не удалось удалить сообщение"} }
             }) { Text("У всех") } } },dismissButton={TextButton(onClick={confirmDeleteMessage=null}) { Text("Отмена") }})
+    }
+
+    activeCall?.let { call ->
+        Dialog(onDismissRequest = { }) {
+            var callSeconds by remember(call.callId) { mutableIntStateOf(0) }
+            LaunchedEffect(call.callId, call.state) {
+                if (call.state == "connected") while (isActive) { delay(1_000); callSeconds++ }
+            }
+            Surface(shape = RoundedCornerShape(28.dp), color = if (dark) Color(0xFF17232B) else Color(0xFFFFFCF1), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(horizontal = 24.dp, vertical = 34.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Box(Modifier.size(82.dp).clip(CircleShape).background(Yellow), contentAlignment = Alignment.Center) {
+                        Text(call.peerName.take(1).uppercase(), fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Ink)
+                    }
+                    Text(call.peerName, fontSize = 23.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(callError ?: when (call.state) {
+                        "incoming" -> "Входящий голосовой звонок"
+                        "ringing" -> "Вызов…"
+                        "connecting" -> "Подключение…"
+                        "connected" -> "Звонок продолжается"
+                        "reconnecting" -> "Восстанавливаем связь…"
+                        "failed" -> "Связь не установлена"
+                        else -> "Голосовой звонок"
+                    }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    if (call.state == "connected") Text("%02d:%02d".format(callSeconds / 60, callSeconds % 60), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (call.state == "incoming") {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            FilledTonalButton(onClick = { endCall("decline") }) { Text("Отклонить") }
+                            Button(onClick = { callError = null; requestCallMicrophone() }) { Text("Ответить") }
+                        }
+                    } else {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                            FilledTonalButton(onClick = { callMuted = !callMuted; callEngine?.setMuted(callMuted) }) { Text(if (callMuted) "Включить микрофон" else "Без звука") }
+                            FilledTonalButton(onClick = { callSpeaker = !callSpeaker; callEngine?.setSpeaker(callSpeaker) }) { Text(if (callSpeaker) "Динамик выкл." else "Динамик") }
+                        }
+                        Button(onClick = { endCall(if (call.state == "ringing") "cancel" else "end") }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                            Text("Завершить звонок")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

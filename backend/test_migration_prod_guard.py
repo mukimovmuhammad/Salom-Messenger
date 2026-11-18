@@ -40,8 +40,11 @@ class ProductionMigrationGuardTests(unittest.TestCase):
             source = Path(directory) / "snapshot.sqlite3"
             with patch.object(app, "DB", source), patch.object(app, "PG_DSN", ""):
                 app.initialize()
-            db = validate_source(source)
-            db.close()
+            db, found_tables = validate_source(source)
+            try:
+                self.assertTrue(found_tables)
+            finally:
+                db.close()
 
 
 if __name__ == "__main__":
