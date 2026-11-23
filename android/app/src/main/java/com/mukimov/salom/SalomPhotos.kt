@@ -31,8 +31,8 @@ internal class SalomPhotos(private val context: Context) {
     private fun key(value: String) = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
 
-    suspend fun pickedAvatar(uri: Uri): ByteArray = withContext(Dispatchers.IO) {
-        val bitmap = if (Build.VERSION.SDK_INT >= 28) {
+    suspend fun avatarSource(uri: Uri): Bitmap = withContext(Dispatchers.IO) {
+        if (Build.VERSION.SDK_INT >= 28) {
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
                 val scale = 512.0 / maxOf(info.size.width, info.size.height, 512)
                 decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
@@ -48,8 +48,13 @@ internal class SalomPhotos(private val context: Context) {
             resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
                 ?: error("Не удалось открыть фотографию")
         }
+    }
+
+    suspend fun avatarJpeg(bitmap: Bitmap, crop: AvatarCrop): ByteArray = withContext(Dispatchers.IO) {
+        val region = crop.region(bitmap)
+        val square = Bitmap.createBitmap(bitmap, region.left, region.top, region.width(), region.height())
         java.io.ByteArrayOutputStream().use { output ->
-            check(bitmap.compress(Bitmap.CompressFormat.JPEG, 85, output))
+            check(square.compress(Bitmap.CompressFormat.JPEG, 85, output))
             output.toByteArray().also { require(it.size <= 512 * 1024) }
         }
     }
@@ -118,7 +123,7 @@ internal class SalomPhotos(private val context: Context) {
     suspend fun saveAvatar(url: String) {
         val bitmap = avatar(url) ?: error("Фото профиля недоступно")
         withContext(Dispatchers.IO) {
-            save(key(url), "Avatars", "image/jpeg", automatic = false) {
+            save(key(url), "Avatars", "image/jpeg", automatic = true) {
                 check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it))
             }
         }

@@ -24,4 +24,12 @@ The TURN service itself is not installed or deployed by this change. A productio
 
 Incoming full-screen call UI depends on Android notification and full-screen-intent settings. Android 13+ also requires notification permission. Microphone capture begins only after the user starts or accepts a call. Android 14+ may restrict background microphone service starts, so the user-visible call action must start the service while SALOM is visible.
 
-The backend creates the additive tables during startup. On PostgreSQL this uses `CREATE TABLE IF NOT EXISTS`; it does not rewrite existing message/profile data. One API worker is still required because the existing WebSocket hub is process-local. Before production use, build and install the Android APK, test two real accounts on mobile data and Wi-Fi, and configure TURN. This implementation has not been built, device-tested, or deployed as part of the source change.
+The backend creates additive tables during startup. The local WebSocket hub is process-local. When Redis is configured, the backend relays events to the local hubs of other workers. For a network compatibility check, test two real accounts on mobile data and Wi-Fi and verify the TURN relay.
+
+## Диагностика Galaxy A15
+
+Для проверки нужны два участника и один согласованный звонок в каждом направлении. Перед первым звонком запишите модель, версию Android, SALOM, тип сети и состояние разрешения микрофона. Камера нужна только для отдельного видеотеста.
+
+На каждом подключённом Android выполните `adb devices -l` и `adb shell getprop ro.build.version.release`. Версию пакета и выданные разрешения сверьте в `adb shell dumpsys package com.mukimov.salom`. Затем выполните `adb logcat -v time SalomCall:I AndroidRuntime:E '*:S'`, воспроизведите вызов, остановите команду и сопоставьте строки двух клиентов по Call ID. Для отчёта нужны переходы signaling, remote/local SDP, ICE gathering и media, точный симптом с каждой стороны и результат повторного звонка.
+
+Если оба клиента обменялись SDP, а ICE не подключился, повторите ту же пару вызовов на Wi-Fi и мобильной сети. При доступе к тестовому окружению отдельно измерьте установление соединения через настроенные TURN UDP и TCP/TLS. Сравните успешный вызов A16 и неуспешный A15 на той же сети. Не пересылайте SDP, ICE-кандидаты целиком, TURN-пароли, IP участников и текст переписки.

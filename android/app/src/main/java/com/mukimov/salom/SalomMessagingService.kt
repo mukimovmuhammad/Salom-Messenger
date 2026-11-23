@@ -133,8 +133,9 @@ class SalomMessagingService : FirebaseMessagingService() {
             data = android.net.Uri.parse("salom://chat/$peerId")
         }
         val pending = PendingIntent.getActivity(this, peerId.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val title = message.notification?.title ?: "Салом"
-        val body = message.notification?.body ?: "Новое сообщение"
+        val privatePreview = local.getBoolean("private_notification_preview", false)
+        val title = if (privatePreview) "Салом" else message.data["title"] ?: message.notification?.title ?: "Салом"
+        val body = if (privatePreview) "Новое сообщение" else message.data["body"] ?: message.notification?.body ?: "Новое сообщение"
         val silent = appVisible
         val notification = NotificationCompat.Builder(this, if (silent) PushNotifications.SILENT_CHANNEL else PushNotifications.CHANNEL)
             .setSmallIcon(R.drawable.ic_notification).setColor(0xFFFFC400.toInt())
@@ -156,6 +157,7 @@ class SalomMessagingService : FirebaseMessagingService() {
             putExtra("incoming_call_id", callId)
             putExtra("incoming_call_peer", callerId)
             putExtra("incoming_call_name", data["caller_name"]?.take(80) ?: "Салом")
+            putExtra("incoming_call_video", data["mode"] == "video")
             this.data = android.net.Uri.parse("salom://call/$callId")
         }
         fun pending(action: String, requestCode: Int) = PendingIntent.getActivity(this, requestCode,

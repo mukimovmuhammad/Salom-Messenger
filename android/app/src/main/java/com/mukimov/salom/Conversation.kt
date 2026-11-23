@@ -6,9 +6,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,7 +32,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.graphics.graphicsLayer
@@ -61,6 +65,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -68,9 +75,8 @@ import java.util.UUID
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
-import androidx.compose.ui.window.Dialog
 
-private data class CallPresentation(val callId: String, val peerId: String, val peerName: String, val incoming: Boolean, val state: String)
+private data class CallPresentation(val callId: String, val peerId: String, val peerName: String, val incoming: Boolean, val state: String, val video: Boolean = false)
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -96,8 +102,12 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     var preparing by remember { mutableStateOf(false) }
     var clearing by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+    var showPeerProfile by remember(person.id) { mutableStateOf(false) }
     var attachmentsMenu by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableFloatStateOf(0f) }
+    var transferJob by remember { mutableStateOf<Job?>(null) }
+    var uploadingId by remember { mutableStateOf<String?>(null) }
+    var pausedUploadId by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var showLocationOptions by remember { mutableStateOf(false) }
     var locationDuration by remember { mutableStateOf("60") }
@@ -110,15 +120,14 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     var messageActions by remember { mutableStateOf<Message?>(null) }
     var confirmDeleteMessage by remember { mutableStateOf<Message?>(null) }
     var editingMessage by remember(person.id) { mutableStateOf<Message?>(null) }
-    var pendingMessage by remember(person.id) { mutableStateOf<Message?>(null) }
+    var sendingId by remember(person.id) { mutableStateOf<String?>(null) }
+    var failedIds by remember(person.id) { mutableStateOf(emptySet<String>()) }
     var queuedOutgoing by remember(person.id) { mutableStateOf<List<CachedOutgoing>>(emptyList()) }
     var showWallpapers by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(!saved) }
     var retry by remember { mutableIntStateOf(0) }
     var clearedThrough by remember { mutableLongStateOf(0) }
-    var pendingSignature by remember { mutableStateOf("") }
-    var pendingId by remember { mutableStateOf("") }
     var eventCursor by remember(person.id) { mutableLongStateOf(0L) }
     var messageCursor by remember(person.id) { mutableLongStateOf(0L) }
     val latestMessages by rememberUpdatedState(messages)
@@ -133,7 +142,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     var callVideoEnabled by remember { mutableStateOf(true) }
     var callError by remember { mutableStateOf<String?>(null) }
     var pendingOutgoing by remember(person.id) { mutableStateOf<Boolean?>(null) }
-    var pendingAnswer by remember(person.id) { mutableStateOf<CallPresentation?>(null) }
+    var pendingAnswer by remember(person.id) { mutableStateOf<Pair<CallPresentation, Boolean>?>(null) }
     var engineReady by remember(person.id) { mutableStateOf(false) }
     val callLifecycle = LocalLifecycleOwner.current.lifecycle
 
@@ -206,12 +215,12 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     fun createOutgoing(video: Boolean) {
         scope.launch {
             try {
-                val id = directory.createCall(person.id).getString("call_id")
+                val id = directory.createCall(person.id, video).getString("call_id")
                 if (!CallSessionManager.incoming(id)) {
                     runCatching { directory.updateCall(id, "cancel") }
                     error("Другой звонок уже открыт")
                 }
-                val call = CallPresentation(id, person.id, person.name, false, "ringing")
+                val call = CallPresentation(id, person.id, person.name, false, "ringing", video)
                 activeCall = call
                 callError = null
                 prepareCall(call, video)
@@ -226,7 +235,8 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     }
 
     val callMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        val call = pendingAnswer
+        val call = pendingAnswer?.first
+        val wantsVideo = pendingAnswer?.second == true
         pendingAnswer = null
         val outgoing = pendingOutgoing
         if (call != null && activeCall?.callId != call.callId) return@rememberLauncherForActivityResult
@@ -240,8 +250,8 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 scope.launch { runCatching { directory.updateCall(call.callId, "decline") } }
             } else sendError = message
         } else if (call != null) {
-            val video = hasCallPermission(Manifest.permission.CAMERA)
-            if (!video) callError = "Камера не разрешена. Звонок продолжится со звуком."
+            val video = wantsVideo && hasCallPermission(Manifest.permission.CAMERA)
+            if (wantsVideo && !video) callError = "Камера не разрешена. Звонок продолжится со звуком."
             prepareCall(call, video)
         } else if (outgoing != null) {
             val video = outgoing && hasCallPermission(Manifest.permission.CAMERA)
@@ -259,17 +269,19 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         else callMicPermission.launch(permissions)
     }
 
-    fun acceptIncomingCall(call: CallPresentation) {
+    fun acceptIncomingCall(call: CallPresentation, withVideo: Boolean = false) {
         if (!CallSessionManager.accept(call.callId)) return
         PushNotifications.cancelCall(context, call.callId)
         activeCall = call.copy(state = "connecting")
         callError = null
         android.util.Log.i("SalomCall", "Incoming call accepted locally")
-        if (hasCallPermission(Manifest.permission.RECORD_AUDIO)) {
-            prepareCall(call, hasCallPermission(Manifest.permission.CAMERA))
-        } else {
-            pendingAnswer = call
-            callMicPermission.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+        val video = withVideo && call.video
+        val permissions = if (video) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+            else arrayOf(Manifest.permission.RECORD_AUDIO)
+        if (permissions.all(::hasCallPermission)) prepareCall(call, video)
+        else {
+            pendingAnswer = call to video
+            callMicPermission.launch(permissions)
         }
     }
     fun endCall(action: String) {
@@ -310,13 +322,13 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             }
             if (existing == CallSessionManager.State.CONNECTING || existing == CallSessionManager.State.CONNECTED) {
                 activeCall = activeCall ?: CallPresentation(call.callId, call.peerId, call.peerName, true,
-                    if (existing == CallSessionManager.State.CONNECTED) "connected" else "connecting")
+                    if (existing == CallSessionManager.State.CONNECTED) "connected" else "connecting", call.video)
                 onCallIntentHandled()
                 return@let
             }
-            activeCall = CallPresentation(call.callId, call.peerId, call.peerName, true, "incoming")
+            activeCall = CallPresentation(call.callId, call.peerId, call.peerName, true, "incoming", call.video)
             onCallIntentHandled()
-            if (call.action == "accept") activeCall?.let(::acceptIncomingCall)
+            if (call.action == "accept") activeCall?.let { acceptIncomingCall(it) }
             if (call.action == "decline") endCall("decline")
             if (call.action == "end") endCall("end")
         }
@@ -345,7 +357,10 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             delay(if (connectingTimeout) 30_000 else 45_000)
             if (activeCall?.callId == call.callId && activeCall?.state == call.state) {
                 if (call.incoming && call.state == "incoming") endCall("missed")
-                else endCall(if (call.state == "ringing") "cancel" else "end")
+                else {
+                    endCall(if (call.state == "ringing") "cancel" else "end")
+                    sendError = if (connectingTimeout) "Не удалось установить связь. Проверь интернет и попробуй снова." else "Собеседник не ответил."
+                }
             }
         }
     }
@@ -354,26 +369,41 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     val busy = sending || preparing || clearing || recording || startingVoice
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    fun cancelVoice() { voiceGeneration++; recorder.cancel(); recording = false; startingVoice = false; recordTime = 0; liveLevels = emptyList() }
+    fun cancelVoice() {
+        if (!recording && !startingVoice) return
+        voiceGeneration++
+        recorder.cancelAsync()
+        recording = false
+        recordTime = 0
+        liveLevels = emptyList()
+    }
 
     suspend fun attemptQueued(item: CachedOutgoing, sendingClaimed: Boolean = false): Boolean {
         if (saved || (!sendingClaimed && sending)) return false
         if (!sendingClaimed) sending = true
         try {
+            if (!localCache.hasQueued(person.id, item.clientId)) return true
+            val started = android.os.SystemClock.elapsedRealtime()
+            sendingId = item.clientId
             val attachment = item.attachment()
             val remoteAttachment = if (attachment != null) {
                 uploadProgress = 0f
-                media.upload(person.id, attachment) { uploadProgress = it }
+                uploadingId = item.clientId
+                try {
+                    coroutineScope {
+                        val upload = async { media.upload(person.id, attachment) { uploadProgress = it } }
+                        transferJob = upload
+                        upload.await()
+                    }
+                } finally { transferJob = null; uploadingId = null }
             } else null
             val sent = directory.sendMessage(person.id, item.text, item.clientId, remoteAttachment, item.replyToId)
-            localCache.upsertMessages(person.id, listOf(sent))
-            localCache.removeQueued(item.clientId)
+            android.util.Log.d("SalomMessage", "id=${item.clientId} stage=http_ack elapsed_ms=${android.os.SystemClock.elapsedRealtime() - started}")
+            localCache.confirmOutgoing(person.id, sent, item.clientId)
+            failedIds = failedIds - item.clientId
             queuedOutgoing = queuedOutgoing.filterNot { it.clientId == item.clientId }
             messages = (messages + sent).filter { it.remoteId > clearedThrough }.distinctBy { it.remoteId }.sortedBy { it.remoteId }
             attachment?.let { media.removeLocal(it) }
-            if (pendingId == item.clientId) {
-                draft = ""; selected = null; uploaded = null; replyingTo = null; pendingId = ""; pendingSignature = ""
-            }
             sendError = null
             sent.attachment?.let { photo ->
                 try { media.autoSaveOwnPhoto(photo) }
@@ -382,42 +412,105 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             }
             return true
         } catch (cancelled: CancellationException) {
-            throw cancelled
+            if (pausedUploadId != item.clientId || !kotlinx.coroutines.currentCoroutineContext().isActive) throw cancelled
+            failedIds = failedIds + item.clientId
+            sendError = "Передача отменена. Файл сохранён для повторной отправки."
+            return false
         } catch (failure: Exception) {
+            if (queuedOutgoing.none { it.clientId == item.clientId }) return true
+            failedIds = failedIds + item.clientId
             sendError = (failure as? DirectoryException)?.message ?: "Сообщение сохранено и отправится, когда связь восстановится"
             return false
         } finally {
             sending = false
-            pendingMessage = null
+            sendingId = null
         }
     }
     fun startVoice() {
-        if (busy || draft.isNotBlank() || selected != null) return
+        if (busy || startingVoice || recording || draft.isNotBlank() || selected != null || editingMessage != null) return
         audio.stop(); focusManager.clearFocus(); keyboard?.hide(); sendError = null; micDenied = false
         startingVoice = true; voiceGeneration++; val ticket = voiceGeneration
         scope.launch {
             try {
                 recorder.start()
                 if (ticket == voiceGeneration && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { recording = true; recordTime = 0; liveLevels = emptyList() }
-                else recorder.cancel()
-            } catch (cancelled: CancellationException) { recorder.cancel(); throw cancelled }
-            catch (failure: Exception) { sendError = failure.message ?: "Не удалось начать запись" }
+                else recorder.cancelAsync()
+            } catch (cancelled: CancellationException) { recorder.cancelAsync(); throw cancelled }
+            catch (failure: Exception) {
+                android.util.Log.w("SalomVoice", "Recorder start failed", failure)
+                sendError = failure.message ?: "Не удалось начать запись"
+            }
             finally { startingVoice = false }
         }
     }
     fun finishVoice() {
         if (!recording) return
-        recording = false; preparing = true
-        scope.launch {
-            try { selected = recorder.finish(); uploaded = null; sendError = null }
-            catch (cancelled: CancellationException) { recorder.cancel(); throw cancelled }
-            catch (failure: Exception) { sendError = failure.message ?: "Не удалось сохранить запись" }
-            finally { preparing = false; liveLevels = emptyList() }
+        recording = false
+        preparing = true
+        val quote = replyingTo
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            try {
+                val queued = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    val voice = recorder.finish()
+                    if (saved) {
+                        val local = media.saveLocal(voice)
+                        val now = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+                        messages = messages + Message("", true, now, attachment = local)
+                        store.saveMessages(person.id, messages)
+                        media.removeLocal(voice)
+                        null
+                    } else {
+                        val persistent = media.persistForQueue(voice)
+                        val outgoing = CachedOutgoing.create(voice.id, person.id, "", System.currentTimeMillis(), persistent,
+                            quote?.remoteId, if (quote?.mine == true) "Вы" else person.name, quote?.let(::replyPreview))
+                        localCache.enqueue(outgoing)
+                        try { media.removeLocal(voice) }
+                        catch (failure: java.io.IOException) { android.util.Log.w("SalomVoice", "Could not clean recording cache", failure) }
+                        outgoing
+                    }
+                }
+                replyingTo = null
+                sendError = null
+                if (queued != null) {
+                    queuedOutgoing = queuedOutgoing + queued
+                    preparing = false
+                    attemptQueued(queued)
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                android.util.Log.w("SalomVoice", "Recorder finish failed", failure)
+                sendError = failure.message ?: "Не удалось сохранить запись"
+            } finally { preparing = false; liveLevels = emptyList() }
         }
     }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startVoice() else { micDenied = true; sendError = "Для голосовых сообщений разреши доступ к микрофону" }
+        if (granted) {
+            micDenied = false
+            sendError = "Удерживай микрофон, чтобы начать запись"
+        } else {
+            android.util.Log.i("SalomVoice", "Microphone permission was denied")
+            micDenied = true
+            sendError = "Для голосовых сообщений разреши доступ к микрофону"
+        }
     }
+    val microphoneAvailable by rememberUpdatedState(!busy && draft.isBlank() && selected == null && editingMessage == null)
+    val beginHold by rememberUpdatedState<() -> Boolean>({
+        if (hasCallPermission(Manifest.permission.RECORD_AUDIO)) {
+            startVoice()
+            true
+        } else {
+            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            false
+        }
+    })
+    val releaseHold by rememberUpdatedState<() -> Unit>({
+        if (recording) finishVoice()
+        else if (startingVoice) {
+            cancelVoice()
+            sendError = "Запиши хотя бы одну секунду"
+        }
+    })
+    val abortHold by rememberUpdatedState<() -> Unit>({ cancelVoice() })
     DisposableEffect(lifecycle, recorder, audio) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) { cancelVoice(); audio.stop() } }
         lifecycle.addObserver(observer)
@@ -513,7 +606,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             var backoff = 1_000L
             while (isActive) {
                 val queued = latestOutgoing.firstOrNull()
-                if (queued != null && !latestSending) {
+                if (queued != null && queued.clientId != pausedUploadId && !latestSending) {
                     if (attemptQueued(queued)) backoff = 1_000L else backoff = (backoff * 2).coerceAtMost(30_000L)
                 }
                 delay(backoff)
@@ -537,7 +630,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                             val deletedIds = mutableListOf<Long>()
                             batch.events.forEach { event ->
                                 when(event.kind) {
-                                    "edit" -> event.message?.let { merged[it.remoteId] = it; changed += it }
+                                    "edit", "reaction" -> event.message?.let { merged[it.remoteId] = it; changed += it }
                                     "delete", "hide" -> { merged.remove(event.messageId); deletedIds += event.messageId }
                                 }
                             }
@@ -548,8 +641,15 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                             eventCursor = maxOf(eventCursor, batch.events.lastOrNull()?.id ?: eventCursor)
                             cursor = maxOf(cursor, clearedThrough, batch.messages.lastOrNull()?.remoteId ?: 0)
                             messageCursor = maxOf(messageCursor, cursor)
-                            localCache.applySync(person.id, changed, deletedIds, messageCursor, eventCursor, clearedThrough)
-                            messages = merged.values.filter { it.remoteId > clearedThrough }.sortedBy { it.remoteId }
+                            val acknowledged = batch.messages.filter { it.mine }.mapNotNull { it.clientId }.distinct()
+                            val removed = localCache.applySync(person.id, changed.filter { it.remoteId !in deletedIds }, deletedIds, messageCursor, eventCursor, clearedThrough, acknowledged)
+                            queuedOutgoing = queuedOutgoing.filterNot { it.clientId in acknowledged }
+                            failedIds = failedIds - acknowledged.toSet()
+                            // Recheck the live list after Room yields so an HTTP acknowledgement cannot be lost.
+                            val live = messages.filter { it.remoteId !in deletedIds && it.remoteId > clearedThrough }
+                            messages = (live.associateBy { it.remoteId } + merged)
+                                .values.filter { it.remoteId > clearedThrough }.sortedBy { it.remoteId }
+                            removed.forEach { outgoing -> outgoing.attachment()?.let { runCatching { media.removeLocal(it) } } }
                         } while (batch.hasMore)
                         connectionError = null
                     } catch (cancelled: CancellationException) { throw cancelled }
@@ -561,7 +661,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         }
     }
     LaunchedEffect(person.id) {
-        if (!saved) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        if (!saved) lifecycle.repeatOnLifecycle(Lifecycle.State.CREATED) {
             var backoff = 1_000L
             while (isActive) {
                 try {
@@ -571,12 +671,21 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                             backoff = 1_000L
                             retry++ // Fetch anything missed before the socket became ready.
                         } else when (event.type) {
-                            "message", "sync" -> retry++
+                            "message" -> {
+                                val incoming = event.message
+                                if (event.peerId == person.id && incoming != null && !incoming.mine &&
+                                    incoming.remoteId > clearedThrough && messages.none { it.remoteId == incoming.remoteId }) {
+                                    messages = (messages + incoming).sortedBy { it.remoteId }
+                                    android.util.Log.d("SalomMessage", "id=${incoming.clientId} stage=websocket_visible")
+                                }
+                                retry++
+                            }
+                            "sync" -> retry++
                             "typing" -> peerTyping = event.typing ?: false
                             "presence" -> { peerOnline = event.online ?: false; retry++ }
                             "call_invite" -> if (event.callId != null && event.peerId == person.id && activeCall == null) {
                                 if (CallSessionManager.incoming(event.callId) || CallSessionManager.current(event.callId) == CallSessionManager.State.RINGING)
-                                    activeCall = CallPresentation(event.callId, person.id, event.callerName ?: person.name, true, "incoming")
+                                    activeCall = CallPresentation(event.callId, person.id, event.callerName ?: person.name, true, "incoming", event.video)
                             }
                             "call_state" -> if (event.callId == activeCall?.callId && event.state != null) {
                                 if (event.state == "accepted" && activeCall?.incoming == false && CallSessionManager.accept(event.callId.orEmpty())) {
@@ -651,11 +760,8 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             if (attachment != null && audio.activeId == attachment.id) audio.stop()
             sending = true; sendError = null; micDenied = false
             val quote = replyingTo
-            val signature = text + ":" + attachment?.id.orEmpty() + ":" + (quote?.remoteId ?: 0)
-            if (signature != pendingSignature || pendingId.isEmpty()) { pendingSignature = signature; pendingId = UUID.randomUUID().toString() }
-            val clientId = pendingId
-            val sentAt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
-            if (!saved && editing == null) pendingMessage = Message(text, true, sentAt, attachment = attachment, receipt = "pending", replyToId = quote?.remoteId, replyAuthor = if (quote?.mine == true) "Вы" else person.name, replyPreview = quote?.let(::replyPreview))
+            val clientId = UUID.randomUUID().toString()
+            val queuedStarted = android.os.SystemClock.elapsedRealtime()
             scope.launch {
                 try {
                     if (editing != null && !saved) {
@@ -669,20 +775,24 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         messages = messages + sent
                         store.saveMessages(person.id, messages)
                     } else {
-                        val queuedAttachment = attachment?.let { media.persistForQueue(it) }
-                        val queued = CachedOutgoing.create(clientId, person.id, text, System.currentTimeMillis(), queuedAttachment, quote?.remoteId, if (quote?.mine == true) "Вы" else person.name, quote?.let(::replyPreview))
-                        localCache.enqueue(queued)
-                        queuedOutgoing = localCache.queuedMessages(person.id)
+                        val queued = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            val queuedAttachment = attachment?.let { media.persistForQueue(it) }
+                            CachedOutgoing.create(clientId, person.id, text, System.currentTimeMillis(), queuedAttachment,
+                                quote?.remoteId, if (quote?.mine == true) "Вы" else person.name, quote?.let(::replyPreview))
+                                .also { localCache.enqueue(it) }
+                        }
+                        queuedOutgoing = queuedOutgoing + queued
+                        android.util.Log.d("SalomMessage", "id=$clientId stage=outbox_visible elapsed_ms=${android.os.SystemClock.elapsedRealtime() - queuedStarted}")
+                        draft = ""; selected = null; uploaded = null; replyingTo = null
                         attemptQueued(queued, sendingClaimed = true)
                     }
                     if (saved || editing != null) {
                         editingMessage = null
-                        pendingMessage = null
-                        draft = ""; selected = null; uploaded = null; replyingTo = null; pendingId = ""; pendingSignature = ""
+                        draft = ""; selected = null; uploaded = null; replyingTo = null
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { sendError = (failure as? DirectoryException)?.message ?: "Не удалось отправить. Попробуй снова" }
-                finally { pendingMessage = null; sending = false }
+                finally { sending = false }
             }
         }
     }
@@ -690,6 +800,19 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     val background = if (dark) listOf(Color(0xFF111D27), Color(0xFF17232B)) else listOf(Color(0xFFF2F0E6), Color(0xFFECEEE6))
     val chatBackground = remember(dark) { Brush.verticalGradient(background) }
     val chatSurface = if (dark) Color(0xFF23303D) else Color.White
+    val call = activeCall
+    var minimizedCall by remember(call?.callId) { mutableStateOf(false) }
+    var connectedAt by remember(call?.callId) { mutableLongStateOf(0L) }
+    var callDuration by remember(call?.callId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(call?.callId, call?.state) {
+        if (call?.state == "connected" && connectedAt == 0L) connectedAt = android.os.SystemClock.elapsedRealtime()
+        if (call?.state == "incoming" || call?.state == "failed") minimizedCall = false
+        while (connectedAt != 0L && (call?.state == "connected" || call?.state == "reconnecting")) {
+            callDuration = audioTime(android.os.SystemClock.elapsedRealtime() - connectedAt)
+            delay(1_000)
+        }
+    }
+    androidx.activity.compose.BackHandler(call != null && minimizedCall) { minimizedCall = false }
     Column(Modifier.fillMaxSize().background(chatBackground).paint(painterResource(chatWallpaperResource(wallpaperId)), contentScale = ContentScale.Crop)) {
         Row(
             Modifier.fillMaxWidth().background(Color(0xFF111721))
@@ -697,6 +820,10 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             verticalAlignment = Alignment.CenterVertically
         ) {
             ChatHeaderAction("back", "Назад") { if (recording || startingVoice) cancelVoice() else onBack() }
+            Row(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp))
+                .clickable(enabled = !saved && !recording && !startingVoice, role = Role.Button, onClickLabel = "Открыть профиль") {
+                    showPeerProfile = true
+                }, verticalAlignment = Alignment.CenterVertically) {
             Avatar(person, size = 38)
             Column(Modifier.weight(1f).padding(start = 9.dp, end = 4.dp)) {
                 Text(person.name, color = Color.White, fontSize = 17.sp, lineHeight = 21.sp,
@@ -710,6 +837,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 Text(status, color = if (!saved && (peerOnline || peerTyping)) Color(0xFFFFD766) else Color(0xFFB6BECC),
                     fontSize = 12.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            }
             if (!saved) {
                 ChatHeaderAction("video", "Видеозвонок") { startOutgoingCall(true) }
                 ChatHeaderAction("phone", "Аудиозвонок") { startOutgoingCall(false) }
@@ -722,31 +850,73 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 }
             }
         }
+        if (call != null && minimizedCall) {
+            FilledTonalButton(onClick = { minimizedCall = false },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(callDuration?.let { "Вернуться к звонку · $it" } ?: "Вернуться к звонку")
+            }
+        }
         val error = sendError ?: connectionError
         if (error != null) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(error, color = MaterialTheme.colorScheme.error, fontSize = 11.sp, modifier = Modifier.weight(1f))
             TextButton(onClick = {
                 if (micDenied) context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + context.packageName)))
-                else { sendError = null; retry++ }
+                else {
+                    val queued = queuedOutgoing.firstOrNull()
+                    if (queued != null && !sending) {
+                        pausedUploadId = null
+                        scope.launch { attemptQueued(queued) }
+                    }
+                    else if (queued == null && (draft.isNotBlank() || selected != null)) send()
+                    else { sendError = null; retry++ }
+                }
             }) { Text(if (micDenied) "Настройки" else "Повторить", fontSize = 11.sp) }
         }
-        if (messages.isEmpty() && pendingMessage == null && queuedOutgoing.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        if (uploadingId != null) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Загрузка ${(uploadProgress * 100).toInt()}%", fontSize = 12.sp)
+                LinearProgressIndicator(progress = { uploadProgress }, modifier = Modifier.fillMaxWidth(), color = Yellow)
+            }
+            TextButton(onClick = {
+                pausedUploadId = uploadingId
+                transferJob?.cancel()
+            }) { Text("Отмена") }
+        }
+        if (messages.isEmpty() && queuedOutgoing.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             if (loading) CircularProgressIndicator(Modifier.size(24.dp), color = Yellow, strokeWidth = 2.dp)
             else Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(if (saved) "Избранное" else "Начни с «Салом»", fontSize = 18.sp, fontWeight = FontWeight.Medium)
                 Text(if (saved) "Сообщения и файлы для себя" else "Напиши сообщение или отправь фото", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
             }
         } else LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.Bottom)) {
-            item(key = "pending-message") { pendingMessage?.let { BoxWithConstraints(Modifier.fillMaxWidth()) { ChatMessage(it, maxWidth * .82f, media, audio, false) } } }
             items(queuedOutgoing.asReversed(), key = { "queued-${it.clientId}" }) { queued ->
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    ChatMessage(queued.toMessage(), maxWidth * .82f, media, audio, false, peerName = person.name)
+                    val bubbleWidth = maxWidth * .82f
+                    val status = when (queued.clientId) {
+                        sendingId -> "pending"
+                        in failedIds -> "failed"
+                        else -> "queued"
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        ChatMessage(queued.toMessage(status), bubbleWidth, media, audio, false, peerName = person.name)
+                        if (status == "failed") TextButton(enabled = !sending, onClick = {
+                            if (pausedUploadId == queued.clientId) pausedUploadId = null
+                            scope.launch { attemptQueued(queued) }
+                        }) { Text("Повторить отправку") }
+                    }
                 }
             }
             itemsIndexed(messages.asReversed()) { index, message ->
                 val newer = if (index > 0) messages[messages.lastIndex - index + 1] else null
                 androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    ChatMessage(message, maxWidth * .82f, media, audio, newer != null && newer.mine == message.mine && newer.time == message.time, onReply = { if (!saved) replyingTo = message }, onLongPress = { messageActions = message }, onLocation = { openLocationMap(it) }, peerName = person.name)
+                    ChatMessage(message, maxWidth * .82f, media, audio, newer != null && newer.mine == message.mine && newer.time == message.time,
+                        onReply = { if (!saved) replyingTo = message }, onLongPress = { messageActions = message },
+                        onLocation = { openLocationMap(it) }, peerName = person.name, onQuote = { quoteId ->
+                            val index = messages.asReversed().indexOfFirst { it.remoteId == quoteId }
+                            if (index < 0) sendError = "Исходное сообщение недоступно в загруженной истории."
+                            else scope.launch { listState.animateScrollToItem(index + queuedOutgoing.size) }
+                        })
                 }
             }
         }
@@ -786,7 +956,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                     Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFE46B64)))
                     Text(audioTime(recordTime),fontSize=14.sp,lineHeight=18.sp,modifier=Modifier.padding(horizontal=8.dp),color=if(dark) Color.White else Ink)
                     Waveform(liveLevels,0f,Yellow,Modifier.weight(1f).height(26.dp).padding(end=12.dp))
-                    ChatAction("stop","Завершить голосовую запись") { finishVoice() }
+                    Text("← Отмена", maxLines = 1, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     BasicTextField(draft,{draft=it.take(4000)},enabled=!busy,modifier=Modifier.weight(1f).padding(vertical=8.dp),textStyle=TextStyle(color=if(dark) Color(0xFFEEF2F5) else Ink,fontSize=15.sp,lineHeight=20.sp),cursorBrush=SolidColor(Yellow),maxLines=4,decorationBox={inner ->
                         if(draft.isEmpty()) Text(if(selected==null) "Сообщение" else "Подпись",color=MaterialTheme.colorScheme.onSurfaceVariant,fontSize=15.sp,lineHeight=20.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
@@ -795,18 +965,54 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                     Box {
                         ChatAction("attach","Прикрепить файл",enabled=!busy) { attachmentsMenu=true }
                     }
+                }
                     val hasContent=draft.isNotBlank() || selected!=null
                     val waiting=sending || preparing || clearing || startingVoice
-                    val action=if(waiting) "busy" else if(recording) "stop" else if(hasContent) "send" else "mic"
-                    Box(Modifier.padding(end=4.dp).size(34.dp).clip(CircleShape).background(Yellow.copy(alpha=if(waiting) .65f else 1f))
-                        .clickable(enabled=!waiting,role=Role.Button) {
-                            when(action) { "stop" -> finishVoice(); "send" -> send(); else -> if(androidx.core.content.ContextCompat.checkSelfPermission(context,android.Manifest.permission.RECORD_AUDIO)==android.content.pm.PackageManager.PERMISSION_GRANTED) startVoice() else micPermission.launch(android.Manifest.permission.RECORD_AUDIO) }
-                        }.semantics { contentDescription=when(action){"mic"->"Записать голосовое";"stop"->"Остановить запись";"busy"->"Обработка сообщения";else->"Отправить"} },contentAlignment=Alignment.Center) {
+                    val action=if(waiting) "busy" else if(recording) "holding" else if(hasContent) "send" else "mic"
+                    Box(Modifier.padding(end=4.dp).size(42.dp)
+                        // Keep the same pointer target while recording replaces the text field.
+                        .pointerInput(person.id) {
+                            val swipeDistance = 64.dp.toPx()
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                if (!microphoneAvailable || down.isConsumed) return@awaitEachGesture
+                                down.consume()
+                                if (!beginHold()) return@awaitEachGesture
+                                var ended = false
+                                try {
+                                    while (!ended) {
+                                        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+                                        val result = if (change == null) VoiceHoldAction.CANCEL else VoicePolicy.holdAction(
+                                            leftDistance = down.position.x - change.position.x,
+                                            threshold = swipeDistance,
+                                            pressed = change.pressed,
+                                            interrupted = change.isConsumed
+                                        )
+                                        change?.consume()
+                                        ended = result != VoiceHoldAction.CONTINUE
+                                        when (result) {
+                                            VoiceHoldAction.RELEASE -> releaseHold()
+                                            VoiceHoldAction.CANCEL -> abortHold()
+                                            VoiceHoldAction.CONTINUE -> Unit
+                                        }
+                                    }
+                                } finally {
+                                    if (!ended) abortHold()
+                                }
+                            }
+                        }
+                        .clip(CircleShape).background(Yellow.copy(alpha=if(waiting) .65f else 1f))
+                        .then(if (action == "send") Modifier.clickable(role = Role.Button, onClick = send) else Modifier)
+                        .semantics { contentDescription=when(action){
+                            "mic" -> "Удерживай для записи голосового"
+                            "holding" -> "Отпусти для отправки голосового"
+                            "busy" -> "Обработка сообщения"
+                            else -> "Отправить"
+                        } },contentAlignment=Alignment.Center) {
                         AnimatedContent(action,transitionSpec={ (fadeIn(tween(140))+scaleIn(initialScale=.6f,animationSpec=tween(160))) togetherWith (fadeOut(tween(90))+scaleOut(targetScale=.65f,animationSpec=tween(100))) },label="microphone-send") { mode ->
-                            if(mode=="busy") CircularProgressIndicator(Modifier.size(17.dp),strokeWidth=2.dp,color=Ink) else ChatGlyph(mode,Ink)
+                            if(mode=="busy") CircularProgressIndicator(Modifier.size(17.dp),strokeWidth=2.dp,color=Ink) else ChatGlyph(if (mode == "holding") "mic" else mode,Ink)
                         }
                     }
-                }
             }
         }
     }
@@ -855,16 +1061,16 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         confirmButton = { TextButton(onClick = { showWallpapers = false }) { Text("Готово") } }
     )
 
-    if (attachmentsMenu) ModalBottomSheet(onDismissRequest={attachmentsMenu=false}, containerColor=chatSurface) {
-        Text("Добавить",modifier=Modifier.padding(horizontal=20.dp,vertical=6.dp),fontSize=18.sp,fontWeight=FontWeight.SemiBold)
-        listOf("Фото / Видео","Файл","Геопозиция").forEachIndexed { index, title ->
-            ListItem(headlineContent={Text(title)}, supportingContent={Text(when(index){0->"Выбрать из галереи";1->"Документы и другие файлы";else->"Отправить место или делиться в реальном времени"})}, leadingContent={Text(when(index){0->"▧";1->"▤";else->"⌖"},fontSize=22.sp)}, modifier=Modifier.clickable {
-                attachmentsMenu=false
-                when(index){0->pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo));1->pickFile.launch(arrayOf("*/*"));else->showLocationOptions=true}
-            }, colors=ListItemDefaults.colors(containerColor=Color.Transparent))
-        }
-        Text("Файлы до 25 МБ",modifier=Modifier.padding(start=20.dp,bottom=24.dp),fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+    if (attachmentsMenu) AttachmentSheet(
+        onDismiss = { attachmentsMenu = false },
+        onPhoto = { attachmentsMenu = false; choose(it) },
+        openPicker = {
+            attachmentsMenu = false
+            pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+        },
+        openFiles = { attachmentsMenu = false; pickFile.launch(arrayOf("*/*")) },
+        openLocation = { attachmentsMenu = false; showLocationOptions = true }
+    )
 
     if(showLocationOptions) AlertDialog(onDismissRequest={showLocationOptions=false},title={Text("Геопозиция")},text={
         Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -878,16 +1084,56 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
 
     messageActions?.let { target ->
         ModalBottomSheet(onDismissRequest={messageActions=null},containerColor=chatSurface) {
+            if (!saved && target.remoteId > 0) {
+                val currentReaction = messages.firstOrNull { it.remoteId == target.remoteId }?.myReaction
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    listOf("👍", "❤️", "😂", "😮", "😢", "🔥").forEach { emoji ->
+                        TextButton(
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                messageActions = null
+                                scope.launch {
+                                    try {
+                                        directory.setReaction(target.remoteId, emoji.takeUnless { it == currentReaction })
+                                        retry++
+                                    } catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (failure: DirectoryException) {
+                                        sendError = if (failure.status == 404 && failure.message == "Not Found")
+                                            "Реакции появятся после обновления сервера." else failure.message
+                                    }
+                                    catch (_: Exception) { sendError = "Не удалось изменить реакцию. Попробуй ещё раз." }
+                                }
+                            }
+                        ) { Text(emoji, fontSize = 16.sp) }
+                    }
+                }
+            }
             Text("Сообщение",modifier=Modifier.padding(horizontal=20.dp,vertical=6.dp),fontSize=17.sp,fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis)
             ListItem(headlineContent={Text("Ответить")},leadingContent={Text("↩",fontSize=22.sp)},modifier=Modifier.clickable { replyingTo=target; editingMessage=null; messageActions=null },colors=ListItemDefaults.colors(containerColor=Color.Transparent))
             ListItem(headlineContent={Text("Копировать")},leadingContent={Text("▢",fontSize=20.sp)},modifier=Modifier.clickable {
                 if(target.text.isNotBlank()) { val clipboard=context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager; clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Сообщение",target.text)) }
                 messageActions=null
             },colors=ListItemDefaults.colors(containerColor=Color.Transparent))
+            target.attachment?.takeIf { Build.VERSION.SDK_INT >= 29 && SalomPhotos.galleryMime(it.mime) }?.let { photo ->
+                ListItem(headlineContent = { Text("Сохранить фото") }, modifier = Modifier.clickable {
+                    messageActions = null
+                    scope.launch {
+                        try {
+                            media.savePhoto(photo)
+                            android.widget.Toast.makeText(context, "Фото сохранено в галерею SALOM", android.widget.Toast.LENGTH_SHORT).show()
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { sendError = "Не удалось сохранить фото" }
+                    }
+                }, colors = ListItemDefaults.colors(containerColor = Color.Transparent))
+            }
             if(target.mine && target.attachment==null) ListItem(headlineContent={Text("Редактировать")},leadingContent={Text("✎",fontSize=20.sp)},modifier=Modifier.clickable { editingMessage=target; replyingTo=null; draft=target.text; selected=null; uploaded=null; messageActions=null },colors=ListItemDefaults.colors(containerColor=Color.Transparent))
             ListItem(headlineContent={Text("Удалить",color=MaterialTheme.colorScheme.error)},leadingContent={Text("⌫",fontSize=20.sp,color=MaterialTheme.colorScheme.error)},modifier=Modifier.clickable { confirmDeleteMessage=target; messageActions=null },colors=ListItemDefaults.colors(containerColor=Color.Transparent))
             Spacer(Modifier.height(20.dp))
         }
+    }
+
+    if (showPeerProfile && activeCall == null) {
+        PeerProfileDialog(person, directory, peerOnline, onDismiss = { showPeerProfile = false })
     }
 
     confirmDeleteMessage?.let { target ->
@@ -903,59 +1149,39 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             }) { Text("У всех") } } },dismissButton={TextButton(onClick={confirmDeleteMessage=null}) { Text("Отмена") }})
     }
 
-    activeCall?.let { call ->
-        Dialog(onDismissRequest = { }) {
-            var callSeconds by remember(call.callId) { mutableIntStateOf(0) }
-            var localCallRenderer by remember(call.callId) { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
-            var remoteCallRenderer by remember(call.callId) { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
-            val rendererEngine = callEngine
-            DisposableEffect(call.callId, rendererEngine, localCallRenderer, remoteCallRenderer) {
-                rendererEngine?.attachRenderers(localCallRenderer, remoteCallRenderer)
-                onDispose { rendererEngine?.attachRenderers(null, null) }
-            }
-            LaunchedEffect(call.callId, call.state) {
-                if (call.state == "connected") while (isActive) { delay(1_000); callSeconds++ }
-            }
-            Surface(shape = RoundedCornerShape(28.dp), color = if (dark) Color(0xFF17232B) else Color(0xFFFFFCF1), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(horizontal = 24.dp, vertical = 34.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Box(Modifier.size(82.dp).clip(CircleShape).background(Yellow), contentAlignment = Alignment.Center) {
-                        Text(call.peerName.take(1).uppercase(), fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Ink)
-                    }
-                    if (engineReady && (call.incoming || callEngine?.hasLocalVideo == true)) Box(Modifier.fillMaxWidth().height(210.dp).clip(RoundedCornerShape(18.dp)).background(Color.Black)) {
-                        AndroidView(factory = { viewContext -> org.webrtc.SurfaceViewRenderer(viewContext).also { CallWebRtc.initRenderer(it, false); remoteCallRenderer = it } }, modifier = Modifier.fillMaxSize(), onRelease = { it.release(); if (remoteCallRenderer === it) remoteCallRenderer = null })
-                        if (callVideoEnabled && callEngine?.hasLocalVideo == true) {
-                            AndroidView(factory = { viewContext -> org.webrtc.SurfaceViewRenderer(viewContext).also { CallWebRtc.initRenderer(it, true); localCallRenderer = it } }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).width(92.dp).height(128.dp).clip(RoundedCornerShape(12.dp)), onRelease = { it.release(); if (localCallRenderer === it) localCallRenderer = null })
-                        }
-                    }
-                    Text(call.peerName, fontSize = 23.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(callError ?: when (call.state) {
-                        "incoming" -> "Входящий голосовой звонок"
-                        "ringing" -> "Вызов…"
-                        "connecting" -> "Подключение…"
-                        "connected" -> "Звонок продолжается"
-                        "reconnecting" -> "Восстанавливаем связь…"
-                        "failed" -> "Связь не установлена"
-                        else -> "Голосовой звонок"
-                    }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    if (call.state == "connected") Text("%02d:%02d".format(callSeconds / 60, callSeconds % 60), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (call.state == "incoming") {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            FilledTonalButton(onClick = { endCall("decline") }) { Text("Отклонить") }
-                            Button(onClick = { acceptIncomingCall(call) }) { Text("Ответить") }
-                        }
-                    } else {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                            FilledTonalButton(onClick = { callMuted = !callMuted; callEngine?.setMuted(callMuted) }) { Text(if (callMuted) "Включить микрофон" else "Без звука") }
-                            FilledTonalButton(onClick = { callSpeaker = !callSpeaker; callEngine?.setSpeaker(callSpeaker) }) { Text(if (callSpeaker) "Динамик выкл." else "Динамик") }
-                            if (callEngine?.hasLocalVideo == true) FilledTonalButton(onClick = { callVideoEnabled = !callVideoEnabled; callEngine?.setVideoEnabled(callVideoEnabled) }) { Text(if (callVideoEnabled) "Камера выкл." else "Камера") }
-                        }
-                        Button(onClick = { endCall(if (call.state == "ringing") "cancel" else "end") }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
-                            Text("Завершить звонок")
-                        }
-                    }
-                }
-            }
+    if (call != null && (!minimizedCall || call.state == "incoming" || call.state == "failed")) key(call.callId) {
+        val status = callError ?: when (call.state) {
+            "incoming" -> if (call.video) "Входящий видеозвонок" else "Входящий аудиозвонок"
+            "ringing" -> "Вызов…"
+            "connecting" -> "Подключение…"
+            "connected" -> if (call.video) "Видеозвонок" else "Аудиозвонок"
+            "reconnecting" -> "Восстанавливаем связь…"
+            "failed" -> "Связь не установлена"
+            else -> "Звонок"
         }
+        val engine = callEngine
+        val incoming = call.state == "incoming"
+        val endAction = when (call.state) {
+            "incoming" -> "decline"
+            "ringing" -> "cancel"
+            else -> "end"
+        }
+        CallScreen(
+            person.copy(name = call.peerName), status, callDuration, wallpaperId, engine,
+            showVideo = engineReady && call.video && engine != null,
+            muted = callMuted, speaker = callSpeaker, camera = callVideoEnabled,
+            actions = CallScreenActions(
+                minimize = if (incoming || call.state == "failed") null else ({ minimizedCall = true }),
+                end = { endCall(endAction) },
+                answer = if (incoming) ({ acceptIncomingCall(call) }) else null,
+                answerVideo = if (incoming && call.video) ({ acceptIncomingCall(call, true) }) else null,
+                mic = engine?.let { { callMuted = !callMuted; it.setMuted(callMuted) } },
+                speaker = engine?.let { { callSpeaker = !callSpeaker; it.setSpeaker(callSpeaker) } },
+                camera = engine?.takeIf { it.hasLocalVideo }?.let {
+                    { callVideoEnabled = !callVideoEnabled; it.setVideoEnabled(callVideoEnabled) }
+                }
+            )
+        )
     }
 }
 
@@ -1013,12 +1239,16 @@ private fun TypingDots() {
 }
 
 @Composable
-internal fun AttachmentBubble(attachment: Attachment, media: MediaFiles, contentColor: Color) {
+internal fun AttachmentBubble(
+    attachment: Attachment, media: MediaFiles, contentColor: Color, maxWidth: androidx.compose.ui.unit.Dp,
+    onLongPress: (() -> Unit)?, photoMeta: (@Composable () -> Unit)?
+) {
     val scope = rememberCoroutineScope()
     var bitmap by remember(attachment.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var loading by remember(attachment.id) { mutableStateOf(false) }
     var error by remember(attachment.id) { mutableStateOf<String?>(null) }
-    var saveMessage by remember(attachment.id) { mutableStateOf<String?>(null) }
+    var openJob by remember(attachment.id) { mutableStateOf<Job?>(null) }
+    var downloadProgress by remember(attachment.id) { mutableFloatStateOf(0f) }
     var attempt by remember { mutableIntStateOf(0) }
     val photo = attachment.mime.startsWith("image/")
     LaunchedEffect(attachment.id, attempt) {
@@ -1031,36 +1261,43 @@ internal fun AttachmentBubble(attachment: Attachment, media: MediaFiles, content
         }
     }
     val color = contentColor
-    Column(Modifier.widthIn(max = 240.dp).clickable(role = Role.Button) {
-        if (photo && error != null) attempt++ else scope.launch {
-            loading = true; error = null
-            try { media.open(attachment) }
+    val open: () -> Unit = open@{
+        if (loading) return@open
+        if (photo && error != null && bitmap == null) attempt++ else {
+            openJob = scope.launch {
+                loading = true; error = null; downloadProgress = 0f
+                try { media.open(attachment) { downloadProgress = it } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { error = (failure as? DirectoryException)?.message ?: "Не удалось открыть файл" }
-            finally { loading = false }
+                finally { loading = false; openJob = null }
+            }
         }
-    }.padding(bottom = 3.dp)) {
-        if (bitmap != null) {
-            val ratio = (bitmap!!.width.toFloat() / bitmap!!.height.coerceAtLeast(1)).coerceIn(.48f, 2.05f)
-            val imageWidth = if (ratio < 1f) (240.dp * ratio).coerceAtLeast(132.dp) else (240.dp).coerceAtMost(240.dp * ratio)
-            Image(bitmap!!.asImageBitmap(), contentDescription = attachment.name, modifier = Modifier.width(imageWidth).heightIn(min = 132.dp, max = 320.dp).aspectRatio(ratio).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+    }
+    Column(Modifier.widthIn(max = minOf(maxWidth, 248.dp))
+        .combinedClickable(role = Role.Button, onLongClick = onLongPress, onClick = open)
+        .padding(bottom = if (photo) 0.dp else 3.dp)) {
+        val image = bitmap
+        if (image != null) {
+            val ratio = image.width.toFloat() / image.height
+            val width = minOf(maxWidth, 248.dp, 300.dp * ratio)
+            Box(Modifier.size(width = width, height = width / ratio).clip(RoundedCornerShape(13.dp))) {
+                Image(image.asImageBitmap(), contentDescription = attachment.name, modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit)
+                photoMeta?.let { Box(Modifier.align(Alignment.BottomEnd)) { it() } }
+            }
         }
-        else Row(Modifier.padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        else Row(Modifier.padding(horizontal = if (photo) 10.dp else 0.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
             if (loading) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = color)
             else Text(if (attachment.mime.startsWith("video/")) "▶" else "↓", fontSize = 24.sp, lineHeight = 28.sp, color = color)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.widthIn(max = 185.dp)) { Text(attachment.name, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = color); Text(fileSize(attachment.size), fontSize = 10.sp, lineHeight = 13.sp, color = color.copy(alpha = .65f)) }
         }
-        error?.let { Text(it, fontSize = 10.sp, color = color) }
-        if (Build.VERSION.SDK_INT >= 29 && bitmap != null && SalomPhotos.galleryMime(attachment.mime)) {
-            TextButton(onClick = {
-                scope.launch {
-                    saveMessage = try { media.savePhoto(attachment); "В галерее SALOM" }
-                    catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { "Не удалось сохранить фото" }
-                }
-            }) { Text(saveMessage ?: "Сохранить фото", color = color, fontSize = 11.sp) }
+        if (loading && openJob != null) {
+            LinearProgressIndicator(progress = { downloadProgress }, modifier = Modifier.fillMaxWidth(), color = color)
+            TextButton(onClick = { openJob?.cancel() }) { Text("Отмена · ${(downloadProgress * 100).toInt()}%", fontSize = 11.sp) }
         }
+        if (photo && image == null) photoMeta?.let { Box(Modifier.align(Alignment.End)) { it() } }
+        error?.let { Text(it, fontSize = 10.sp, color = color, modifier = Modifier.padding(horizontal = if (photo) 10.dp else 0.dp)) }
     }
 }
 
@@ -1106,6 +1343,14 @@ internal fun ChatGlyph(kind: String, color: Color) {
                 lineTo(w * .40f, h * .33f); lineTo(w * .32f, h * .11f); close()
             }, color)
             "mic" -> { drawRoundRect(color, Offset(w*.36f,h*.09f), Size(w*.28f,h*.51f), androidx.compose.ui.geometry.CornerRadius(w*.14f)); drawPath(Path().apply { moveTo(w*.22f,h*.42f); cubicTo(w*.22f,h*.88f,w*.78f,h*.88f,w*.78f,h*.42f) },color,style=Stroke(line)); drawLine(color,Offset(w*.5f,h*.76f),Offset(w*.5f,h*.94f),line); drawLine(color,Offset(w*.33f,h*.94f),Offset(w*.67f,h*.94f),line) }
+            "speaker" -> {
+                drawPath(Path().apply {
+                    moveTo(w * .09f, h * .38f); lineTo(w * .29f, h * .38f); lineTo(w * .52f, h * .19f)
+                    lineTo(w * .52f, h * .81f); lineTo(w * .29f, h * .62f); lineTo(w * .09f, h * .62f); close()
+                }, color)
+                drawArc(color, -52f, 104f, false, Offset(w * .37f, h * .29f), Size(w * .36f, h * .42f), style = Stroke(line))
+                drawArc(color, -52f, 104f, false, Offset(w * .31f, h * .12f), Size(w * .60f, h * .76f), style = Stroke(line))
+            }
             "play" -> drawPath(Path().apply { moveTo(w*.3f,h*.16f); lineTo(w*.8f,h*.5f); lineTo(w*.3f,h*.84f); close() },color)
             "pause" -> { drawRoundRect(color,Offset(w*.28f,h*.18f),Size(w*.15f,h*.64f),androidx.compose.ui.geometry.CornerRadius(w*.03f)); drawRoundRect(color,Offset(w*.57f,h*.18f),Size(w*.15f,h*.64f),androidx.compose.ui.geometry.CornerRadius(w*.03f)) }
             "stop" -> drawRoundRect(color,Offset(w*.23f,h*.23f),Size(w*.54f,h*.54f),androidx.compose.ui.geometry.CornerRadius(w*.08f))

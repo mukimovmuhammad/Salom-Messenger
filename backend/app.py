@@ -14,6 +14,7 @@ import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket
@@ -26,7 +27,7 @@ import media
 from database import INTEGRITY_ERRORS, PostgresConnection, create_pool
 from realtime import RealtimeHub
 from push import PushDispatcher
-from auth import schema as auth_schema, install_routes as install_auth_routes
+from auth import SESSION_DEVICE_SCHEMA, schema as auth_schema, install_routes as install_auth_routes
 from monitoring import RuntimeMetrics, RuntimeReporter
 
 DB = Path(os.environ.get('SALOM_DB', '/var/lib/salom-api/directory.sqlite3'))
@@ -85,6 +86,12 @@ def close_pg_pool():
             pg_pool.close(timeout=10)
             pg_pool = None
 
+REACTION_SCHEMA = '''CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  actor_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL, PRIMARY KEY(message_id, actor_id))'''
+REACTION_EMOJI = frozenset(('👍', '❤️', '😂', '😮', '😢', '🔥'))
+
 def initialize():
     if os.environ.get('SALOM_REQUIRE_POSTGRES') == '1' and not PG_DSN:
         raise RuntimeError('SALOM_DATABASE_URL is required on this server')
@@ -115,6 +122,10 @@ def initialize():
               state TEXT NOT NULL DEFAULT 'pending', attempts BIGINT NOT NULL DEFAULT 0,
               next_at DOUBLE PRECISION NOT NULL DEFAULT 0, last_error TEXT);
               CREATE INDEX IF NOT EXISTS call_push_jobs_pending ON call_push_jobs(state,next_at);''')
+            db.execute("ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS media_mode TEXT NOT NULL DEFAULT 'audio'")
+            db.execute("ALTER TABLE attachments ADD COLUMN IF NOT EXISTS sha256 TEXT")
+            db.execute(REACTION_SCHEMA)
+            db.execute(SESSION_DEVICE_SCHEMA)
             for table, columns in required.items():
                 db.execute(f'SELECT {columns} FROM {table} LIMIT 0')
         return
@@ -181,6 +192,9 @@ def initialize():
           CREATE INDEX IF NOT EXISTS email_challenges_email ON email_challenges(email,created);
         ''')
         media.schema(db)
+        db.execute(REACTION_SCHEMA)
+        if 'media_mode' not in {row[1] for row in db.execute('PRAGMA table_info(call_sessions)')}:
+            db.execute("ALTER TABLE call_sessions ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'audio'")
         media.avatar_schema(db)
 
 @asynccontextmanager
@@ -440,15 +454,27 @@ def current_profile(authorization):
 install_auth_routes(app, connect, current_profile, public, digest)
 media.install_routes(app, connect, current_profile, throttle)
 
-def message_json(row, db):
+def message_reactions(db, message_ids):
+    if not message_ids:
+        return {}
+    placeholders = ','.join('?' for _ in message_ids)
+    result = {}
+    for item in db.execute(f'SELECT message_id,actor_id,emoji FROM message_reactions WHERE message_id IN ({placeholders})', tuple(message_ids)).fetchall():
+        result.setdefault(item['message_id'], {})[item['actor_id']] = item['emoji']
+    return result
+
+def message_json(row, db, reaction_batch=None):
     receipt = 'read' if row['read_at'] else 'delivered' if row['delivered_at'] else 'sent'
     reply = None
+    if reaction_batch is None:
+        reaction_batch = message_reactions(db, {row['id']})
+    reactions = reaction_batch.get(row['id'], {})
     if row['reply_to_id']:
         ref = db.execute('SELECT m.id,m.sender_id,m.text,m.attachment_id,a.kind,a.name FROM messages m LEFT JOIN attachments a ON a.id=m.attachment_id WHERE m.id=?', (row['reply_to_id'],)).fetchone()
         if ref:
             preview = ref['text'] or ('Фото' if ref['kind'] == 'image' else 'Видео' if ref['kind'] == 'video' else 'Голосовое сообщение' if ref['kind'] == 'voice' else ref['name'] or 'Вложение')
             reply = {'id': ref['id'], 'sender_id': ref['sender_id'], 'text': preview[:300]}
-    return {**{key: row[key] for key in ('id', 'sender_id', 'recipient_id', 'text', 'created')}, 'edited_at': row['edited_at'], 'receipt': receipt, 'attachment': media.metadata(db, row['attachment_id']), 'reply_to': reply, 'location_id': row['location_id']}
+    return {**{key: row[key] for key in ('id', 'sender_id', 'recipient_id', 'client_id', 'text', 'created')}, 'edited_at': row['edited_at'], 'receipt': receipt, 'attachment': media.metadata(db, row['attachment_id']), 'reply_to': reply, 'location_id': row['location_id'], 'reactions': {'sender': reactions.get(row['sender_id']), 'recipient': reactions.get(row['recipient_id'])}}
 
 class LiveLocationInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -524,6 +550,48 @@ def message_scope(db, me, message_id):
     if not row: raise HTTPException(404, 'Сообщение уже недоступно')
     return row
 
+def message_for_change(db, me, message_id):
+    row = message_scope(db, me, message_id)
+    if PG_DSN:
+        # Event cursors assume increasing commit order within one conversation.
+        pair = ':'.join(sorted((row['sender_id'], row['recipient_id'])))
+        db.execute('SELECT pg_advisory_xact_lock(83215, hashtext(?))', (pair,)).fetchone()
+        row = message_scope(db, me, message_id)
+    return row
+
+class ReactionInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    emoji: str | None = Field(max_length=8)
+
+@app.put('/messages/{message_id}/reaction')
+def set_message_reaction(message_id: int, body: ReactionInput, authorization: str | None = Header(default=None)):
+    me = current_profile(authorization)['id']
+    if body.emoji is not None and body.emoji not in REACTION_EMOJI:
+        raise HTTPException(400, 'Эта реакция недоступна')
+    throttle('message-reaction:' + me, limit=90)
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = message_for_change(db, me, message_id)
+        peer = row['recipient_id'] if row['sender_id'] == me else row['sender_id']
+        if message_id <= media.cutoff(db, me, peer) or db.execute(
+            'SELECT 1 FROM message_hides WHERE owner_id=? AND message_id=?', (me, message_id)).fetchone():
+            raise HTTPException(404, 'Сообщение уже недоступно')
+        before = db.execute('SELECT emoji FROM message_reactions WHERE message_id=? AND actor_id=?', (message_id, me)).fetchone()
+        changed = (before['emoji'] if before else None) != body.emoji
+        if changed:
+            if body.emoji is None:
+                db.execute('DELETE FROM message_reactions WHERE message_id=? AND actor_id=?', (message_id, me))
+            else:
+                db.execute('INSERT INTO message_reactions(message_id,actor_id,emoji) VALUES(?,?,?) ON CONFLICT(message_id,actor_id) DO UPDATE SET emoji=excluded.emoji',
+                           (message_id, me, body.emoji))
+            db.execute("INSERT INTO message_events(message_id,sender_id,recipient_id,kind) VALUES(?,?,?,'reaction')",
+                       (message_id, row['sender_id'], row['recipient_id']))
+        result = message_json(row, db)
+    if changed:
+        publish_realtime(peer, {'type': 'sync', 'peer_id': me})
+        publish_realtime(me, {'type': 'sync', 'peer_id': peer})
+    return result
+
 @app.put('/messages/{message_id}')
 def edit_message(message_id: int, body: dict, authorization: str | None = Header(default=None)):
     me = current_profile(authorization)
@@ -531,7 +599,7 @@ def edit_message(message_id: int, body: dict, authorization: str | None = Header
     if not text or len(text) > 4000: raise HTTPException(400, 'Сообщение должно содержать от 1 до 4000 символов')
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        row = message_scope(db, me['id'], message_id)
+        row = message_for_change(db, me['id'], message_id)
         if row['sender_id'] != me['id'] or row['attachment_id']: raise HTTPException(403, 'Можно изменить только своё текстовое сообщение')
         db.execute('UPDATE messages SET text=?,edited_at=? WHERE id=?', (text, time.time(), message_id))
         db.execute('INSERT INTO message_events(message_id,sender_id,recipient_id,kind) VALUES(?,?,?,\'edit\')', (message_id,row['sender_id'],row['recipient_id']))
@@ -546,7 +614,7 @@ def delete_message(message_id: int, scope: str = Query(default='me', pattern='^(
     me = current_profile(authorization)
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        row = message_scope(db, me['id'], message_id)
+        row = message_for_change(db, me['id'], message_id)
         sender, recipient = row['sender_id'], row['recipient_id']
         if scope == 'everyone':
             if sender != me['id']: raise HTTPException(403, 'Удалить у всех может только автор сообщения')
@@ -577,6 +645,7 @@ class MessageInput(BaseModel):
 
 @app.post('/messages')
 def send_message(body: MessageInput, authorization: str | None = Header(default=None)):
+    started = time.perf_counter()
     me = current_profile(authorization)
     try:
         UUID(body.recipient_id)
@@ -589,6 +658,12 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
     throttle('send-message:' + me['id'], limit=60)
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
+        media.lock_sender(db, me['id'])
+        existing = db.execute('SELECT * FROM messages WHERE sender_id=? AND client_id=?', (me['id'], body.client_id)).fetchone()
+        if existing:
+            if existing['recipient_id'] != body.recipient_id or existing['text'] != text or existing['attachment_id'] != body.attachment_id or existing['reply_to_id'] != body.reply_to_id:
+                raise HTTPException(409, 'Этот идентификатор уже использован для другого сообщения')
+            return message_json(existing, db)
         if not db.execute('SELECT id FROM profiles WHERE id=? AND is_active=1', (body.recipient_id,)).fetchone():
             raise HTTPException(404, 'Получатель недоступен')
         if body.reply_to_id is not None:
@@ -597,11 +672,6 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
               ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))''',
               (cleared, body.reply_to_id, me['id'], body.recipient_id, body.recipient_id, me['id'])).fetchone()
             if not reference: raise HTTPException(400, 'Сообщение для ответа недоступно')
-        existing = db.execute('SELECT * FROM messages WHERE sender_id=? AND client_id=?', (me['id'], body.client_id)).fetchone()
-        if existing:
-            if existing['recipient_id'] != body.recipient_id or existing['text'] != text or existing['attachment_id'] != body.attachment_id or existing['reply_to_id'] != body.reply_to_id:
-                raise HTTPException(409, 'Этот идентификатор уже использован для другого сообщения')
-            return message_json(existing, db)
         if body.attachment_id:
             attachment = db.execute('SELECT * FROM attachments WHERE id=? AND owner_id=? AND peer_id=? AND ready=1', (body.attachment_id, me['id'], body.recipient_id)).fetchone()
             if not attachment: raise HTTPException(400, 'Вложение недоступно')
@@ -609,8 +679,12 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
         cursor = db.execute('INSERT INTO messages(sender_id,recipient_id,client_id,text,created,attachment_id,reply_to_id) VALUES(?,?,?,?,?,?,?)', (me['id'], body.recipient_id, body.client_id, text, time.time(), body.attachment_id, body.reply_to_id))
         db.execute('INSERT INTO push_jobs(message_id) VALUES(?)', (cursor.lastrowid,))
         outgoing = message_json(db.execute('SELECT * FROM messages WHERE id=?', (cursor.lastrowid,)).fetchone(), db)
+    committed = time.perf_counter()
     app.state.push.wake.set()
     publish_realtime(body.recipient_id, {'type': 'message', 'peer_id': me['id'], 'message': outgoing})
+    if os.environ.get('SALOM_TRACE_MESSAGE_LATENCY') == '1':
+        logging.getLogger('uvicorn.error').info('Message id=%s commit_ms=%.1f dispatch_ms=%.1f',
+            body.client_id, (committed - started) * 1000, (time.perf_counter() - committed) * 1000)
     return outgoing
 
 class PushTokenInput(BaseModel):
@@ -621,6 +695,7 @@ class PushTokenInput(BaseModel):
 class CallCreateInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     peer_id: str = Field(min_length=36, max_length=36)
+    mode: Literal['audio', 'video'] = 'audio'
 
 @app.get('/calls/config')
 def call_config(authorization: str | None = Header(default=None)):
@@ -661,13 +736,14 @@ def create_call(body: CallCreateInput, authorization: str | None = Header(defaul
         active = db.execute("SELECT 1 FROM call_sessions WHERE state IN ('ringing','accepted') AND expires>? AND (caller_id IN (?,?) OR callee_id IN (?,?)) LIMIT 1", (now, me['id'],peer_id,me['id'],peer_id)).fetchone()
         if active: raise HTTPException(409, 'У одного из участников уже идёт звонок')
         db.execute('DELETE FROM call_sessions WHERE created<?', (now - 30 * 86400,))
-        db.execute('INSERT INTO call_sessions(id,caller_id,callee_id,state,created,updated,expires) VALUES(?,?,?,\'ringing\',?,?,?)', (call_id,me['id'],peer_id,now,now,now+CALL_RING_SECONDS))
+        db.execute("INSERT INTO call_sessions(id,caller_id,callee_id,state,created,updated,expires,media_mode) VALUES(?,?,?,'ringing',?,?,?,?)",
+                   (call_id, me['id'], peer_id, now, now, now + CALL_RING_SECONDS, body.mode))
         db.execute('INSERT INTO call_push_jobs(call_id) VALUES(?)', (call_id,))
         caller_name = me['name']
-    publish_realtime(peer_id, {'type':'call_invite','peer_id':me['id'],'call_id':call_id,'caller_name':caller_name,'expires_at':now+CALL_RING_SECONDS})
+    publish_realtime(peer_id, {'type':'call_invite','peer_id':me['id'],'call_id':call_id,'caller_name':caller_name,'expires_at':now+CALL_RING_SECONDS,'mode':body.mode})
     dispatcher = getattr(app.state, 'push', None)
     if dispatcher: dispatcher.wake.set()
-    return {'call_id':call_id,'state':'ringing','expires_at':now+CALL_RING_SECONDS}
+    return {'call_id':call_id,'state':'ringing','expires_at':now+CALL_RING_SECONDS,'mode':body.mode}
 
 @app.post('/calls/{call_id}/state')
 def update_call(call_id: str, body: CallStateInput, authorization: str | None = Header(default=None)):
@@ -803,28 +879,39 @@ def get_typing(peer_id: str, authorization: str | None = Header(default=None)):
         row = db.execute('SELECT typing_to,typing_at FROM profiles WHERE id=? AND is_active=1', (peer_id,)).fetchone()
         return {'typing': bool(row and row['typing_to'] == me['id'] and row['typing_at'] >= time.time() - 6)}
 
+def lock_message_receipts(db, profile_id):
+    if PG_DSN:
+        db.execute('SELECT pg_advisory_xact_lock(83214, hashtext(?))', (profile_id,)).fetchone()
+
+
 @app.get('/messages')
 def get_messages(peer_id: str, after: int = Query(default=0, ge=0), receipts_after: int = Query(default=0, ge=0), events_after: int = Query(default=0, ge=0), authorization: str | None = Header(default=None)):
     me = current_profile(authorization)
     with connect() as db:
         cleared = media.cutoff(db, me['id'], peer_id)
         now = time.time()
-        db.execute('UPDATE messages SET delivered_at=COALESCE(delivered_at,?) WHERE sender_id=? AND recipient_id=? AND id>?', (now, peer_id, me['id'], cleared))
-        receipt_cursor = db.execute('UPDATE messages SET read_at=COALESCE(read_at,?) WHERE sender_id=? AND recipient_id=? AND id>? AND read_at IS NULL', (now, peer_id, me['id'], cleared))
+        lock_message_receipts(db, me['id'])
+        receipt_cursor = db.execute('''UPDATE messages SET delivered_at=COALESCE(delivered_at,?), read_at=?
+          WHERE sender_id=? AND recipient_id=? AND id>? AND read_at IS NULL''', (now, now, peer_id, me['id'], cleared))
         rows = db.execute('''SELECT * FROM messages WHERE id>? AND NOT EXISTS(SELECT 1 FROM message_hides h WHERE h.owner_id=? AND h.message_id=messages.id) AND
           ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))
           ORDER BY id LIMIT 100''', (max(after, cleared), me['id'], me['id'], peer_id, peer_id, me['id'])).fetchall()
         receipts = db.execute('''SELECT id, CASE WHEN read_at IS NOT NULL THEN 'read' WHEN delivered_at IS NOT NULL THEN 'delivered' ELSE 'sent' END AS receipt
           FROM messages WHERE sender_id=? AND recipient_id=? AND id>? ORDER BY id''', (me['id'], peer_id, max(receipts_after, cleared))).fetchall()
         events = db.execute('''SELECT * FROM message_events WHERE id>? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND (owner_id IS NULL OR owner_id=?) ORDER BY id LIMIT 300''', (events_after, me['id'],peer_id,peer_id,me['id'],me['id'])).fetchall()
+        reaction_batch = message_reactions(db, {row['id'] for row in rows} | {
+            event['message_id'] for event in events if event['kind'] in ('edit', 'reaction')
+        })
         changes = []
         for event in events:
             change = {'id': event['id'], 'message_id': event['message_id'], 'kind': event['kind']}
-            if event['kind'] == 'edit':
-                current = db.execute('SELECT * FROM messages WHERE id=?',(event['message_id'],)).fetchone()
-                if current: change['message'] = message_json(current,db)
+            if event['kind'] in ('edit', 'reaction'):
+                current = db.execute('''SELECT * FROM messages WHERE id=? AND id>? AND NOT EXISTS
+                   (SELECT 1 FROM message_hides WHERE message_id=messages.id AND owner_id=?)''',
+                    (event['message_id'], cleared, me['id'])).fetchone()
+                if current: change['message'] = message_json(current, db, reaction_batch)
             changes.append(change)
-        payload = {'messages': [message_json(row, db) for row in rows], 'receipts': [{'id': row['id'], 'receipt': row['receipt']} for row in receipts], 'events': changes, 'has_more': len(rows) == 100, 'cleared_through': cleared}
+        payload = {'messages': [message_json(row, db, reaction_batch) for row in rows], 'receipts': [{'id': row['id'], 'receipt': row['receipt']} for row in receipts], 'events': changes, 'has_more': len(rows) == 100, 'cleared_through': cleared}
     if receipt_cursor.rowcount:
         publish_realtime(peer_id, {'type': 'sync', 'peer_id': me['id']})
         publish_realtime(me['id'], {'type': 'sync', 'peer_id': peer_id})
@@ -835,7 +922,8 @@ def conversations(authorization: str | None = Header(default=None)):
     me = current_profile(authorization)
     with connect() as db:
         now = time.time()
-        db.execute('''UPDATE messages SET delivered_at=COALESCE(delivered_at,?) WHERE recipient_id=?
+        lock_message_receipts(db, me['id'])
+        db.execute('''UPDATE messages SET delivered_at=? WHERE recipient_id=? AND delivered_at IS NULL
           AND id>COALESCE((SELECT through_id FROM conversation_clears c WHERE c.owner_id=? AND c.peer_id=messages.sender_id),0)''', (now, me['id'], me['id']))
         rows = db.execute('''WITH latest AS (
           SELECT CASE WHEN sender_id=? THEN recipient_id ELSE sender_id END AS peer_id, MAX(id) AS last_id

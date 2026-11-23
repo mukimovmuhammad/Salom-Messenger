@@ -2,6 +2,8 @@ package com.mukimov.salom
 
 import android.content.Context
 import android.media.AudioManager
+import android.media.AudioDeviceInfo
+import android.os.Build
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
@@ -25,7 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-/** Audio-only peer connection. Media stays between the two devices; only SDP/ICE is relayed by SALOM. */
+/** Peer connection with optional, explicitly enabled video. Media stays between the two devices; only SDP/ICE is relayed by SALOM. */
 internal class CallEngine(
     context: Context,
     private val callId: String,
@@ -59,11 +61,15 @@ internal class CallEngine(
     private fun reportState(state: String) {
         scope.launch(Dispatchers.Main.immediate) {
             if (!closed) {
-                android.util.Log.i("SalomCall", "WebRTC state: $state")
+                trace("media=$state")
                 if (state == "connected") CallSessionManager.connected(callId)
                 onState(state)
             }
         }
+    }
+
+    private fun trace(event: String) {
+        android.util.Log.i("SalomCall", "call=$callId $event")
     }
 
     suspend fun prepare() {
@@ -82,13 +88,14 @@ internal class CallEngine(
             }
         }
         check(!closed) { "Звонок уже завершён" }
+        trace("platform=${android.os.Build.VERSION.SDK_INT} ice_servers=${iceServers.size} video=$video")
         val factory = CallWebRtc.factory(app)
         val configuration = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
         peer = factory.createPeerConnection(configuration, object : PeerConnection.Observer {
-            override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
+            override fun onSignalingChange(state: PeerConnection.SignalingState) = trace("signaling=$state")
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                 reportState(when (state) {
                     PeerConnection.IceConnectionState.CONNECTED, PeerConnection.IceConnectionState.COMPLETED -> "connected"
@@ -100,10 +107,14 @@ internal class CallEngine(
                 })
             }
             override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = trace("gathering=$state")
             override fun onIceCandidate(candidate: IceCandidate) {
-                val data = JSONObject().put("sdp_mid", candidate.sdpMid).put("sdp_mline_index", candidate.sdpMLineIndex).put("candidate", candidate.sdp)
-                scope.launch { runCatching { directory.signalCall(callId, "ice", data) } }
+                val data = JSONObject().put("sdp_mid", candidate.sdpMid ?: JSONObject.NULL).put("sdp_mline_index", candidate.sdpMLineIndex).put("candidate", candidate.sdp)
+                scope.launch {
+                    try { directory.signalCall(callId, "ice", data) }
+                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) { trace("ice_send_failed") }
+                }
             }
             override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) = Unit
             override fun onAddStream(stream: org.webrtc.MediaStream) = Unit
@@ -144,7 +155,8 @@ internal class CallEngine(
             }.onFailure { android.util.Log.w("SalomCall", "Camera setup failed", it); reportState("video_unavailable") }
         }
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        audioManager.isSpeakerphoneOn = false
+        if (Build.VERSION.SDK_INT >= 31) audioManager.clearCommunicationDevice()
+        else audioManager.isSpeakerphoneOn = false
     }
 
     fun createOffer() {
@@ -174,6 +186,7 @@ internal class CallEngine(
                         scope.launch(Dispatchers.Main) {
                             if (closed || peer !== connection) return@launch
                             remoteDescriptionReady = true
+                            trace("remote_sdp=$kind")
                             drainIce(connection)
                             if (kind == "offer") createAnswer()
                         }
@@ -182,9 +195,10 @@ internal class CallEngine(
                 }, remote)
             }
             "ice" -> {
-                val mid = payload.optString("sdp_mid").takeIf(String::isNotBlank)
+                val mid = if (payload.isNull("sdp_mid")) null else payload.optString("sdp_mid").takeIf(String::isNotBlank)
                 val candidate = IceCandidate(mid, payload.optInt("sdp_mline_index"), payload.optString("candidate"))
-                if (remoteDescriptionReady) connection.addIceCandidate(candidate) else pendingIce.add(candidate)
+                if (remoteDescriptionReady) connection.addIceCandidate(candidate)
+                else if (pendingIce.size < 128) pendingIce.add(candidate)
             }
         }
     }
@@ -213,6 +227,7 @@ internal class CallEngine(
                     scope.launch(Dispatchers.Main) {
                         if (closed) return@launch
                         val kind = description.type.canonicalForm()
+                        trace("local_sdp=$kind")
                         runCatching { directory.signalCall(callId, kind, JSONObject().put("type", kind).put("sdp", description.description)) }
                             .onFailure { reportState("failed") }
                     }
@@ -223,7 +238,16 @@ internal class CallEngine(
     }
 
     fun setMuted(muted: Boolean) { track?.setEnabled(!muted) }
-    fun setSpeaker(enabled: Boolean) { audioManager.isSpeakerphoneOn = enabled }
+    fun setSpeaker(enabled: Boolean) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 31) {
+                if (enabled) audioManager.availableCommunicationDevices
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                    ?.let(audioManager::setCommunicationDevice)
+                else audioManager.clearCommunicationDevice()
+            } else audioManager.isSpeakerphoneOn = enabled
+        }.onFailure { android.util.Log.w("SalomCall", "Audio route change failed", it) }
+    }
     fun setVideoEnabled(enabled: Boolean) { videoTrack?.setEnabled(enabled) }
     fun attachRenderers(local: SurfaceViewRenderer?, remote: SurfaceViewRenderer?) {
         if (closed) return
@@ -246,7 +270,11 @@ internal class CallEngine(
         runCatching { track?.dispose() }
         runCatching { source?.dispose() }
         camera = null; textureHelper = null; videoTrack = null; videoSource = null; track = null; source = null; peer = null
-        runCatching { audioManager.mode = previousMode; audioManager.isSpeakerphoneOn = previousSpeaker }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 31) audioManager.clearCommunicationDevice()
+            else audioManager.isSpeakerphoneOn = previousSpeaker
+            audioManager.mode = previousMode
+        }
         runCatching { CallForegroundService.stop(app) }
     }
 }

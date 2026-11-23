@@ -6,19 +6,23 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 /** Owns the microphone only between explicit start and stop/cancel. Never survives the chat lifecycle. */
 internal class VoiceRecorder(private val context: Context, private val media: MediaFiles) {
+    private val worker = Dispatchers.IO.limitedParallelism(1)
     private var recorder: MediaRecorder? = null
     private var output: Pair<Attachment, File>? = null
     private var startedAt = 0L
     private val peaks = mutableListOf<Int>()
-    var reachedLimit = false
+    @Volatile var reachedLimit = false
         private set
     @Suppress("DEPRECATION")
-    suspend fun start() = withContext(Dispatchers.IO) {
+    suspend fun start() = withContext(worker) {
         synchronized(this@VoiceRecorder) {
             cancel()
             val target = media.newVoiceFile()
@@ -34,6 +38,7 @@ internal class VoiceRecorder(private val context: Context, private val media: Me
                 instance.prepare(); instance.start()
                 recorder = instance; output = target; startedAt = SystemClock.elapsedRealtime(); reachedLimit = false; peaks.clear()
             } catch (failure: Exception) {
+                android.util.Log.w("SalomVoice", "MediaRecorder could not start", failure)
                 runCatching { instance.release() }; target.second.delete()
                 throw DirectoryException("Не удалось включить микрофон. Проверь разрешение и повтори")
             }
@@ -45,7 +50,7 @@ internal class VoiceRecorder(private val context: Context, private val media: Me
         if (recorder != null && peaks.size < 3000) peaks.add(amplitude)
         return VoicePolicy.waveform(listOf(amplitude)).first()
     }
-    suspend fun finish(): Attachment = withContext(Dispatchers.IO) {
+    suspend fun finish(): Attachment = withContext(worker) {
         synchronized(this@VoiceRecorder) {
             val target = output ?: throw DirectoryException("Запись уже остановлена")
             val samples = peaks.toList()
@@ -61,7 +66,11 @@ internal class VoiceRecorder(private val context: Context, private val media: Me
             target.first.copy(size = target.second.length(), durationMs = duration.coerceAtMost(VoicePolicy.MAX_MS), waveform = VoicePolicy.waveform(samples))
         }
     }
-    @Synchronized fun cancel() {
+    fun cancelAsync() { cleanup.launch(worker) { cancel() } }
+
+    private companion object { val cleanup = CoroutineScope(SupervisorJob()) }
+
+    @Synchronized private fun cancel() {
         val previous = recorder; recorder = null
         runCatching { previous?.stop() }; runCatching { previous?.release() }
         output?.second?.delete(); output = null; peaks.clear(); reachedLimit = false

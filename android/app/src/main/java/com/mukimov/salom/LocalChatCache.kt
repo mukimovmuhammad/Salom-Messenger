@@ -29,7 +29,9 @@ internal data class CachedMessage(
     val replyAuthor: String?,
     val replyPreview: String?,
     val edited: Boolean,
-    val locationId: String?
+    val locationId: String?,
+    val myReaction: String? = null,
+    val peerReaction: String? = null
 ) {
     fun toMessage() = Message(
         text = text,
@@ -42,7 +44,7 @@ internal data class CachedMessage(
         replyAuthor = replyAuthor,
         replyPreview = replyPreview,
         edited = edited,
-        locationId = locationId
+        locationId = locationId, myReaction = myReaction, peerReaction = peerReaction
     )
 
     companion object {
@@ -58,7 +60,7 @@ internal data class CachedMessage(
             replyAuthor = message.replyAuthor,
             replyPreview = message.replyPreview,
             edited = message.edited,
-            locationId = message.locationId
+            locationId = message.locationId, myReaction = message.myReaction, peerReaction = message.peerReaction
         )
     }
 }
@@ -101,11 +103,11 @@ internal data class CachedOutgoing(
     val replyAuthor: String?,
     val replyPreview: String?
 ) {
-    fun toMessage() = Message(
+    fun toMessage(status: String = "queued") = Message(
         text = text, mine = true,
         time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(createdAt)),
         attachment = attachmentJson?.let { runCatching { Attachment.from(JSONObject(it)) }.getOrNull() },
-        receipt = "queued", replyToId = replyToId, replyAuthor = replyAuthor,
+        receipt = status, replyToId = replyToId, replyAuthor = replyAuthor,
         replyPreview = replyPreview
     )
 
@@ -146,15 +148,32 @@ internal interface LocalChatDao {
     @Query("DELETE FROM queued_messages WHERE clientId = :clientId")
     suspend fun deleteQueuedMessage(clientId: String)
 
+    @Query("SELECT * FROM queued_messages WHERE peerId = :peerId AND clientId IN (:clientIds)")
+    suspend fun queuedById(peerId: String, clientIds: List<String>): List<CachedOutgoing>
+
+    @Query("DELETE FROM queued_messages WHERE peerId = :peerId AND clientId IN (:clientIds)")
+    suspend fun acknowledge(peerId: String, clientIds: List<String>)
+
+    @Transaction
+    suspend fun confirmOutgoing(peerId: String, message: CachedMessage, clientId: String) {
+        upsertMessages(listOf(message))
+        acknowledge(peerId, listOf(clientId))
+    }
+
     @Query("DELETE FROM queued_messages WHERE peerId = :peerId")
     suspend fun clearQueuedMessages(peerId: String)
 
     @Transaction
-    suspend fun applySync(peerId: String, messages: List<CachedMessage>, deletedIds: List<Long>, state: CachedChatState) {
+    suspend fun applySync(peerId: String, messages: List<CachedMessage>, deletedIds: List<Long>, state: CachedChatState,
+        confirmedIds: List<String>): List<CachedOutgoing> {
+        val confirmed = confirmedIds.chunked(100).flatMap { ids ->
+            queuedById(peerId, ids).also { acknowledge(peerId, ids) }
+        }
         if (state.clearedThrough > 0) deleteThrough(peerId, state.clearedThrough)
         if (deletedIds.isNotEmpty()) deleteMessages(peerId, deletedIds)
         if (messages.isNotEmpty()) upsertMessages(messages)
         upsertChatState(state)
+        return confirmed
     }
 
     @Query("SELECT * FROM cached_conversations ORDER BY position")
@@ -173,7 +192,7 @@ internal interface LocalChatDao {
     }
 }
 
-@Database(entities = [CachedMessage::class, CachedConversation::class, CachedChatState::class, CachedOutgoing::class], version = 2, exportSchema = false)
+@Database(entities = [CachedMessage::class, CachedConversation::class, CachedChatState::class, CachedOutgoing::class], version = 3, exportSchema = false)
 internal abstract class LocalChatDatabase : RoomDatabase() {
     abstract fun chatDao(): LocalChatDao
 
@@ -185,7 +204,14 @@ internal abstract class LocalChatDatabase : RoomDatabase() {
                 context.applicationContext,
                 LocalChatDatabase::class.java,
                 "salom-local-chat.db"
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+        }
+
+        internal val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cached_messages ADD COLUMN myReaction TEXT")
+                db.execSQL("ALTER TABLE cached_messages ADD COLUMN peerReaction TEXT")
+            }
         }
 
         internal val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -228,20 +254,26 @@ internal class LocalChatCache(context: Context) {
         dao.upsertQueuedMessage(message)
     }
 
-    suspend fun removeQueued(clientId: String) = withContext(Dispatchers.IO) {
-        dao.deleteQueuedMessage(clientId)
+    suspend fun confirmOutgoing(peerId: String, message: Message, clientId: String) = withContext(Dispatchers.IO) {
+        dao.confirmOutgoing(peerId, CachedMessage.from(peerId, message), clientId)
+    }
+
+    suspend fun hasQueued(peerId: String, clientId: String): Boolean = withContext(Dispatchers.IO) {
+        dao.queuedById(peerId, listOf(clientId)).isNotEmpty()
     }
 
     suspend fun clearQueued(peerId: String) = withContext(Dispatchers.IO) {
         dao.clearQueuedMessages(peerId)
     }
 
-    suspend fun applySync(peerId: String, messages: List<Message>, deletedIds: List<Long>, messageCursor: Long, eventCursor: Long, clearedThrough: Long) = withContext(Dispatchers.IO) {
+    suspend fun applySync(peerId: String, messages: List<Message>, deletedIds: List<Long>, messageCursor: Long, eventCursor: Long,
+        clearedThrough: Long, confirmedIds: List<String> = emptyList()) = withContext(Dispatchers.IO) {
         dao.applySync(
             peerId,
             messages.filter { it.remoteId > 0 }.map { CachedMessage.from(peerId, it) },
             deletedIds,
-            CachedChatState(peerId, messageCursor, eventCursor, clearedThrough)
+            CachedChatState(peerId, messageCursor, eventCursor, clearedThrough),
+            confirmedIds
         )
     }
 

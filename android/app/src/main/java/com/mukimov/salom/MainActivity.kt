@@ -21,6 +21,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -51,6 +53,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONArray
@@ -61,8 +65,8 @@ internal val Yellow = Color(0xFFFFC400)
 internal val Ink = Color(0xFF25241F)
 private val Soft = Color(0xFFF5F5F3)
 internal data class Person(val id: String, val name: String, val initials: String, val color: Color, val preview: String, val username: String = "", val avatarUrl: String = "")
-internal data class Message(val text: String, val mine: Boolean, val time: String = "", val remoteId: Long = 0, val attachment: Attachment? = null, val receipt: String = "sent", val replyToId: Long? = null, val replyAuthor: String? = null, val replyPreview: String? = null, val edited: Boolean = false, val locationId: String? = null)
-internal data class IncomingCallIntent(val callId: String, val peerId: String, val peerName: String, val action: String? = null)
+internal data class Message(val text: String, val mine: Boolean, val time: String = "", val remoteId: Long = 0, val attachment: Attachment? = null, val receipt: String = "sent", val replyToId: Long? = null, val replyAuthor: String? = null, val replyPreview: String? = null, val edited: Boolean = false, val locationId: String? = null, val clientId: String? = null, val myReaction: String? = null, val peerReaction: String? = null)
+internal data class IncomingCallIntent(val callId: String, val peerId: String, val peerName: String, val action: String? = null, val video: Boolean = false)
 private val savedPerson = Person("saved", "Избранное", "★", Yellow, "Сообщения и заметки для себя")
 
 class MainActivity : ComponentActivity() {
@@ -87,7 +91,7 @@ class MainActivity : ComponentActivity() {
 
     private fun readCallIntent(intent: android.content.Intent) = intent.getStringExtra("incoming_call_id")?.let { callId ->
         val peerId = intent.getStringExtra("incoming_call_peer") ?: return@let null
-        IncomingCallIntent(callId, peerId, intent.getStringExtra("incoming_call_name") ?: "Входящий звонок", intent.getStringExtra("incoming_call_action"))
+        IncomingCallIntent(callId, peerId, intent.getStringExtra("incoming_call_name") ?: "Входящий звонок", intent.getStringExtra("incoming_call_action"), intent.getBooleanExtra("incoming_call_video", false))
     }
     override fun onResume() {
         super.onResume()
@@ -143,6 +147,8 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
     var signedIn by remember { mutableStateOf(store.text("signed_in") == "yes") }
     var dark by remember { mutableStateOf(store.text("dark") == "yes") }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var settingsPage by rememberSaveable { mutableStateOf(SettingsPage.MENU) }
+    var settingsReturnTab by rememberSaveable { mutableIntStateOf(0) }
     var activeChat by remember { mutableStateOf<Person?>(null) }
     var chatWallpaper by rememberSaveable { mutableStateOf(store.text("chat_wallpaper", "midnight")) }
     var profileVersion by remember { mutableIntStateOf(0) }
@@ -203,6 +209,10 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
         }
     }
     val openAccount: (SalomAccount) -> Unit = { account -> activeChat = if (account.id == "self") savedPerson else Person(account.id, account.name, account.name.take(1).uppercase(), Yellow, "", account.username, account.avatarUrl) }
+    val changeTheme: (Boolean) -> Unit = { dark = it; store.save("dark", if (it) "yes" else "no") }
+    val logout: () -> Unit = {
+        appScope.launch { AuthClient(context, directory).logout(); activeChat = null; signedIn = false; securingAccount = false; tab = 0 }
+    }
     val scheme = if (dark) darkColorScheme(primary = Yellow, onPrimary = Ink, background = Color(0xFF171816), surface = Color(0xFF232420), secondaryContainer = Color(0xFF494125))
     else lightColorScheme(primary = Yellow, onPrimary = Ink, background = Soft, surface = Color.White, onSurface = Ink, secondaryContainer = Color(0xFFFFF0B2))
     SideEffect {
@@ -235,7 +245,13 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
                 Scaffold(containerColor = scheme.background, contentWindowInsets = WindowInsets(0, 0, 0, 0), bottomBar = {
                     Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(scheme.surface).selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
                         listOf("Чаты", "Контакты", "Настройки", "Профиль").forEachIndexed { index, title ->
-                            Column(Modifier.weight(1f).heightIn(min = 56.dp).selectable(selected = tab == index, role = Role.Tab, onClick = { tab = index }).padding(vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                            Column(Modifier.weight(1f).heightIn(min = 56.dp).selectable(selected = tab == index, role = Role.Tab, onClick = {
+                                if (index == 2) {
+                                    settingsPage = SettingsPage.MENU
+                                    if (tab != 2) settingsReturnTab = tab
+                                }
+                                tab = index
+                            }).padding(vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                                 Box(Modifier.size(width = 42.dp, height = 27.dp).clip(RoundedCornerShape(16.dp)).background(if (tab == index) Yellow else Color.Transparent), contentAlignment = Alignment.Center) {
                                     NavIcon(index, if (tab == index) Ink else scheme.onSurfaceVariant, Modifier.size(22.dp))
                                 }
@@ -250,15 +266,19 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
                             0 -> Column {
                                 val updateStatus by updater.status.collectAsState()
                                 if (updateStatus is UpdateStatus.Available || updateStatus is UpdateStatus.Ready) {
-                                    TextButton(onClick = { tab = 2 }, modifier = Modifier.fillMaxWidth()) { Text("Доступно обновление Салома →") }
+                                    TextButton(onClick = { settingsPage = SettingsPage.UPDATES; settingsReturnTab = 0; tab = 2 },
+                                        modifier = Modifier.fillMaxWidth()) { Text("Доступно обновление Салома →") }
                                 }
                                 Box(Modifier.weight(1f)) { Chats(context, store, accounts, directory, openAccount, { activeChat = it }, { tab = 1 }, { tab = 3 }) }
                             }
                             1 -> PhoneContacts(context, accounts, openAccount)
-                            2 -> Settings(updater, dark, { dark = it; store.save("dark", if (it) "yes" else "no") }, {
-                                appScope.launch { AuthClient(context, directory).logout(); activeChat = null; signedIn = false; securingAccount = false; tab = 0 }
-                            })
-                            else -> Profile(store, profileVersion, directory, directoryError, { securingAccount = true }) { directoryError = null; profileVersion++ }
+                            2 -> Settings(updater, store, profileVersion, dark, changeTheme, settingsPage,
+                                onPage = { settingsPage = it }, onExit = { tab = settingsReturnTab }, onProfile = { tab = 3 },
+                                active = tab == 2)
+                            else -> Profile(store, profileVersion, directory, directoryError, dark, changeTheme,
+                                onSettings = { settingsPage = SettingsPage.MENU; settingsReturnTab = 3; tab = 2 },
+                                onLogout = logout, onVerify = { securingAccount = true },
+                                onChanged = { directoryError = null; profileVersion++ })
                         }
                     }
                 }
@@ -373,16 +393,25 @@ private fun Chats(context: Context, store: Store, accounts: List<SalomAccount>, 
 }
 
 @Composable
-private fun Profile(store: Store, version: Int, directory: DirectoryClient, syncError: String?, onVerify: () -> Unit, onChanged: () -> Unit) {
+private fun Profile(store: Store, version: Int, directory: DirectoryClient, syncError: String?, dark: Boolean,
+    onDark: (Boolean) -> Unit, onSettings: () -> Unit, onLogout: () -> Unit, onVerify: () -> Unit, onChanged: () -> Unit) {
     var edit by remember { mutableStateOf(false) }
+    var confirmLogout by rememberSaveable { mutableStateOf(false) }
     val name = remember(version) { store.text("name", "Твой профиль") }
-    val about = remember(version) { store.text("about", "Салом! Я на связи 💛") }
+    val about = remember(version) { store.text("about") }
     val username = remember(version) { store.text("username") }
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     val photos = remember(context) { SalomPhotos(context) }
     var avatarBusy by remember { mutableStateOf(false) }
     var avatarMessage by remember { mutableStateOf<String?>(null) }
+    var avatarDraft by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var showAppearance by rememberSaveable { mutableStateOf(false) }
+    var showAccount by rememberSaveable { mutableStateOf(false) }
+    var chosenCover by remember(dark) {
+        val name = store.text(if (dark) "profile_cover_dark" else "profile_cover_light")
+        mutableStateOf(ProfileCover.entries.firstOrNull { it.name == name } ?: ProfileCover.HONEY)
+    }
     val picker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -390,53 +419,132 @@ private fun Profile(store: Store, version: Int, directory: DirectoryClient, sync
             avatarBusy = true
             avatarMessage = null
             try {
-                val jpeg = photos.pickedAvatar(uri)
-                val url = directory.uploadAvatar(jpeg)
-                store.save("avatar_url", url)
-                onChanged()
-                runCatching { photos.rememberAvatar(url, jpeg) }
+                avatarDraft = photos.avatarSource(uri)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { avatarMessage = "Не удалось сменить фото профиля. Проверь подключение." }
+            catch (_: Exception) { avatarMessage = "Не удалось открыть выбранное фото." }
             finally { avatarBusy = false }
         }
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(16.dp))
-        Avatar(Person("me", name, name.take(1).uppercase(), Yellow, "", avatarUrl=store.text("avatar_url")), 76)
-        Spacer(Modifier.height(12.dp))
-        Text(name, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-        Text("Мой профиль", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(enabled = !avatarBusy, onClick = {
-                picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
-            }) { Text(if (avatarBusy) "Загрузка…" else "Сменить фото") }
-            if (android.os.Build.VERSION.SDK_INT >= 29 && store.text("avatar_url").isNotBlank()) {
-                TextButton(enabled = !avatarBusy, onClick = {
-                    scope.launch {
-                        avatarMessage = try { photos.saveAvatar(store.text("avatar_url")); "Аватар сохранён в галерее SALOM" }
-                        catch (cancelled: CancellationException) { throw cancelled }
-                        catch (_: Exception) { "Не удалось сохранить аватар" }
-                    }
-                }) { Text("Сохранить") }
-            }
-        }
-        avatarMessage?.let { Text(it, fontSize = 12.sp) }
-        if (syncError != null) Text(syncError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = { edit = true }, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Редактировать профиль", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
-        Spacer(Modifier.height(12.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(18.dp)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                if (store.text("phone").isNotEmpty()) Detail(store.text("phone"), "Телефон")
-                if (store.text("email").isNotEmpty()) Detail(store.text("email"), "Email")
-                if (username.isNotEmpty()) Detail("@$username", "Имя пользователя")
-                Detail(about, "О себе")
-            }
-        }
-        AccountSecurityCard(directory, onVerify)
-        Spacer(Modifier.height(18.dp))
-        Text("Всё начинается с «Салом»", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val palette = MaterialTheme.colorScheme
+    val avatarUrl = remember(version) { store.text("avatar_url") }
+    val phone = remember(version) { store.text("phone") }
+    val email = remember(version) { store.text("email") }
+    val choosePhoto = {
+        picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.fillMaxWidth().height(195.dp)) {
+            Canvas(Modifier.fillMaxWidth().height(144.dp).background(chosenCover.brush(dark))) {
+                val tint = Color.White.copy(alpha = if (dark) .07f else .23f)
+                drawCircle(tint, size.height * .72f, Offset(size.width * .84f, size.height * .08f))
+                drawCircle(Color.White.copy(alpha = .24f), size.height * .88f,
+                    Offset(size.width * .84f, size.height * .08f), style = Stroke(1.dp.toPx()))
+            }
+            Box(
+                Modifier.align(Alignment.BottomCenter).size(110.dp).shadow(9.dp, CircleShape)
+                    .clip(CircleShape).background(palette.surface)
+                    .clickable(enabled = !avatarBusy, role = Role.Button, onClick = choosePhoto)
+                    .semantics { contentDescription = "Сменить фото профиля" },
+                contentAlignment = Alignment.Center
+            ) {
+                Avatar(Person("me", name, name.trim().take(1).uppercase().ifEmpty { "С" }, Yellow, "", avatarUrl = avatarUrl), 102)
+                if (avatarBusy) CircularProgressIndicator(Modifier.size(28.dp), color = palette.onSurface, strokeWidth = 3.dp)
+            }
+        }
+        Column(
+            Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(14.dp))
+            Text(name, style = MaterialTheme.typography.headlineMedium, fontSize = 30.sp, lineHeight = 36.sp,
+                letterSpacing = (-.55).sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            if (username.isNotBlank()) {
+                Text("@$username", modifier = Modifier.padding(top = 4.dp),
+                    fontSize = 14.sp, color = palette.onSurfaceVariant, fontWeight = FontWeight.Medium)
+            }
+            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { edit = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)) { Text("Редактировать", textAlign = TextAlign.Center) }
+                FilledTonalButton(onClick = choosePhoto, enabled = !avatarBusy, modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(13.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)) {
+                    Text(if (avatarBusy) "Загрузка…" else "Сменить фото", textAlign = TextAlign.Center)
+                }
+            }
+            avatarMessage?.let { Text(it, color = palette.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center) }
+            syncError?.let { Text(it, color = palette.error, fontSize = 12.sp, modifier = Modifier.padding(8.dp)) }
+
+            val details = listOfNotNull(
+                phone.takeIf(String::isNotBlank)?.let { "Телефон" to it },
+                email.takeIf(String::isNotBlank)?.let { "Почта" to it },
+                about.takeIf(String::isNotBlank)?.let { "О себе" to it }
+            )
+            if (details.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Surface(shape = RoundedCornerShape(20.dp), color = palette.surface) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
+                        details.forEachIndexed { index, (label, value) ->
+                            if (index != 0) HorizontalDivider(color = palette.outlineVariant.copy(alpha = .55f))
+                            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text(label, Modifier.weight(.36f), color = palette.onSurfaceVariant, fontSize = 14.sp)
+                                Text(value, Modifier.weight(.64f), fontSize = 14.sp, lineHeight = 20.sp,
+                                    textAlign = TextAlign.End, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Surface(shape = RoundedCornerShape(20.dp), color = palette.surface) {
+                Column(Modifier.fillMaxWidth()) {
+                    ProfileAction("Тёмная тема", "moon", checked = dark, onClick = { onDark(!dark) }) {
+                        Switch(dark, onCheckedChange = null, colors = SwitchDefaults.colors(checkedTrackColor = Yellow, checkedThumbColor = Ink))
+                    }
+                    ProfileDivider()
+                    ProfileAction("Оформление профиля", "photo", onClick = { showAppearance = true })
+                    ProfileDivider()
+                    ProfileAction("Аккаунт", "person", onClick = { showAccount = true })
+                    ProfileDivider()
+                    ProfileAction("Настройки", "settings", onClick = onSettings)
+                    ProfileDivider()
+                    ProfileAction("Выйти из профиля", "exit", color = palette.error, onClick = { confirmLogout = true })
+                }
+            }
+            Spacer(Modifier.height(22.dp))
+        }
+    }
+    if (showAppearance) ProfileCoverPicker(dark, chosenCover, onClose = { showAppearance = false }) { cover ->
+        chosenCover = cover
+        store.save(if (dark) "profile_cover_dark" else "profile_cover_light", cover.name)
+    }
+    if (showAccount) ProfileAccountDialog(directory, onClose = { showAccount = false }, onVerify = {
+        showAccount = false
+        onVerify()
+    })
+    avatarDraft?.let { bitmap ->
+        AvatarCropDialog(bitmap, onDismiss = { avatarDraft = null }) { crop ->
+            avatarDraft = null
+            avatarBusy = true
+            scope.launch {
+                try {
+                    val jpeg = photos.avatarJpeg(bitmap, crop)
+                    val url = directory.uploadAvatar(jpeg)
+                    store.save("avatar_url", url)
+                    onChanged()
+                    try {
+                        photos.rememberAvatar(url, jpeg)
+                        if (android.os.Build.VERSION.SDK_INT >= 29) photos.saveAvatar(url)
+                        avatarMessage = "Фото профиля обновлено"
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { avatarMessage = "Фото профиля обновлено. Сохранить копию в галерее не удалось." }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { avatarMessage = "Не удалось сменить фото профиля. Проверь подключение." }
+                finally { avatarBusy = false }
+            }
+        }
+    }
+    if (confirmLogout) LogoutConfirmation(onDismiss = { confirmLogout = false }, onLogout = onLogout)
     if (edit) {
         var newName by remember { mutableStateOf(name) }; var newAbout by remember { mutableStateOf(about) }; var newUsername by remember { mutableStateOf(username) }
         val usernameValid = newUsername.isEmpty() || newUsername.matches(Regex("[a-zA-Z][a-zA-Z0-9_]{3,23}"))
@@ -466,47 +574,217 @@ private fun Profile(store: Store, version: Int, directory: DirectoryClient, sync
 }
 
 @Composable
-private fun Detail(value: String, label: String) { Column { Text(value, fontSize = 14.sp); Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp)) } }
+private fun ProfileAction(
+    title: String,
+    icon: String,
+    color: Color = MaterialTheme.colorScheme.onSurface,
+    checked: Boolean? = null,
+    onClick: () -> Unit,
+    trailing: @Composable (() -> Unit)? = null
+) {
+    val action = if (checked == null) Modifier.clickable(role = Role.Button, onClick = onClick)
+        else Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = { onClick() })
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 58.dp).then(action).padding(horizontal = 16.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ProfileIcon(icon, color)
+        Text(title, Modifier.weight(1f), color = color, fontSize = 15.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp)
+        if (trailing != null) trailing()
+        else ProfileIcon("chevron", MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 
 @Composable
-private fun Settings(updater: AppUpdater, dark: Boolean, onDark: (Boolean) -> Unit, onLogout: () -> Unit) {
-    val notificationSettingsContext = androidx.compose.ui.platform.LocalContext.current
-    var confirmLogout by remember { mutableStateOf(false) }
-    val photos = remember(notificationSettingsContext) { SalomPhotos(notificationSettingsContext) }
-    var autoSave by remember { mutableStateOf(photos.autoSave) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Header("Настройки", "Сделай Салом своим")
-        Card(Modifier.padding(horizontal = 14.dp), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Тёмная тема", fontWeight = FontWeight.Medium); Text("Для вечерних разговоров", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked = dark, onCheckedChange = onDark, colors = SwitchDefaults.colors(checkedTrackColor = Yellow, checkedThumbColor = Ink)) }
-                HorizontalDivider(Modifier.padding(vertical = 18.dp))
-                Detail("На этом телефоне", "Хранение заметок")
-                if (android.os.Build.VERSION.SDK_INT >= 29) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Сохранять свои фото из чатов")
-                            Text("Pictures/SALOM/Chat Images", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(checked = autoSave, onCheckedChange = { autoSave = it; photos.autoSave = it })
-                    }
+private fun ProfileDivider() = HorizontalDivider(
+    Modifier.padding(horizontal = 16.dp),
+    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f)
+)
+
+@Composable
+private fun ProfileIcon(icon: String, color: Color) {
+    if (icon == "person" || icon == "settings") {
+        NavIcon(if (icon == "person") 3 else 2, color)
+        return
+    }
+    Canvas(Modifier.size(24.dp)) {
+        val u = size.width / 24
+        val stroke = Stroke(1.75f * u, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+        val shape = Path().apply {
+            fun point(x: Float, y: Float) = lineTo(x * u, y * u)
+            fun start(x: Float, y: Float) = moveTo(x * u, y * u)
+            when (icon) {
+                "moon" -> {
+                    start(20.5f, 15f)
+                    cubicTo(14f * u, 17.5f * u, 6.5f * u, 10f * u, 9f * u, 3.5f * u)
+                    cubicTo(1f * u, 6f * u, 1f * u, 16f * u, 7f * u, 20f * u)
+                    cubicTo(12f * u, 23f * u, 18f * u, 20f * u, 20.5f * u, 15f * u)
+                    close()
                 }
-                Spacer(Modifier.height(20.dp))
-                Detail(updater.installedDisplayVersion, "Версия Салом")
-                TextButton(onClick = {
-                    val settingsContext = android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, "com.mukimov.salom")
-                    // App notification settings are available from Android 8; older devices use app details.
-                    if (android.os.Build.VERSION.SDK_INT >= 26) settingsContext.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    else { settingsContext.action = android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS; settingsContext.data = android.net.Uri.parse("package:com.mukimov.salom") }
-                    notificationSettingsContext.startActivity(settingsContext)
-                }) { Text("Настроить уведомления") }
+                "exit" -> {
+                    start(10f, 4f); point(4f, 4f); point(4f, 20f); point(10f, 20f)
+                    start(9f, 12f); point(21f, 12f)
+                    start(16f, 7f); point(21f, 12f); point(16f, 17f)
+                }
+                "back" -> { start(15f, 5f); point(8f, 12f); point(15f, 19f) }
+                "update" -> {
+                    start(12f, 3f); point(12f, 15f)
+                    start(7f, 10f); point(12f, 15f); point(17f, 10f)
+                    start(4f, 16f); point(4f, 20f); point(20f, 20f); point(20f, 16f)
+                }
+                "bell" -> {
+                    start(4f, 18f); point(6f, 15f); point(6f, 10f)
+                    cubicTo(6f * u, 2.5f * u, 18f * u, 2.5f * u, 18f * u, 10f * u)
+                    point(18f, 15f); point(20f, 18f); close()
+                    start(10f, 21f); point(14f, 21f)
+                }
+                "info" -> {
+                    addOval(androidx.compose.ui.geometry.Rect(3f * u, 3f * u, 21f * u, 21f * u))
+                    start(12f, 11f); point(12f, 16f)
+                    start(12f, 8f); point(12.1f, 8f)
+                }
+                "photo" -> {
+                    start(4f, 5f); point(20f, 5f); point(20f, 19f); point(4f, 19f); close()
+                    start(4f, 16f); point(9f, 11f); point(13f, 15f); point(16f, 12f); point(20f, 16f)
+                }
+                else -> { start(9f, 7f); point(14f, 12f); point(9f, 17f) }
             }
         }
-        UpdateCard(updater)
-        TextButton(onClick = { confirmLogout = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("Выйти из профиля", color = MaterialTheme.colorScheme.error) }
+        drawPath(shape, color, style = stroke)
     }
-    if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("Выйти из профиля?") }, text = { Text("Локальные сообщения останутся на этом телефоне.") }, confirmButton = { TextButton(onClick = { confirmLogout = false; onLogout() }) { Text("Выйти", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Отмена", color = MaterialTheme.colorScheme.onSurface) } })
 }
+
+@Composable
+private fun LogoutConfirmation(onDismiss: () -> Unit, onLogout: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Выйти из профиля?") },
+        text = { Text("Локальные сообщения останутся на этом телефоне.") },
+        confirmButton = { TextButton(onClick = { onDismiss(); onLogout() }) { Text("Выйти", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена", color = MaterialTheme.colorScheme.onSurface) } }
+    )
+}
+
+private enum class SettingsPage(val title: String) {
+    MENU("Настройки"), UPDATES("Обновить приложение"),
+    NOTIFICATIONS("Уведомления"), ABOUT("О приложении")
+}
+
+@Composable
+private fun Settings(
+    updater: AppUpdater, store: Store, profileVersion: Int, dark: Boolean, onDark: (Boolean) -> Unit,
+    page: SettingsPage, onPage: (SettingsPage) -> Unit, onExit: () -> Unit, onProfile: () -> Unit,
+    active: Boolean
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val colors = MaterialTheme.colorScheme
+    val photos = remember(context) { SalomPhotos(context) }
+    var autoSave by remember { mutableStateOf(photos.autoSave) }
+    var privatePreview by remember {
+        mutableStateOf(store.prefs.getBoolean("private_notification_preview", false))
+    }
+    val goBack = { if (page == SettingsPage.MENU) onExit() else onPage(SettingsPage.MENU) }
+    BackHandler(enabled = active, onBack = goBack)
+    val updateStatus by updater.status.collectAsState()
+
+    Column(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxWidth().background(colors.surface).heightIn(min = 56.dp).padding(vertical = 4.dp)) {
+            Text(page.title, Modifier.align(Alignment.Center).padding(horizontal = 60.dp),
+                textAlign = TextAlign.Center, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            IconButton(onClick = goBack, modifier = Modifier.align(Alignment.CenterStart).padding(start = 6.dp)
+                .semantics { contentDescription = "Назад" }) {
+                ProfileIcon("back", colors.onSurface)
+            }
+        }
+        key(page) {
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when (page) {
+                    SettingsPage.MENU -> {
+                        val person = remember(profileVersion) {
+                            val name = store.text("name").ifBlank { "Мой профиль" }
+                            Person("settings-profile", name, name.take(1).uppercase(), Yellow, "",
+                                username = store.text("username").trim().trimStart('@'), avatarUrl = store.text("avatar_url"))
+                        }
+                        Row(Modifier.fillMaxWidth().background(colors.surface)
+                            .clickable(role = Role.Button, onClickLabel = "Открыть профиль", onClick = onProfile)
+                            .padding(horizontal = 18.dp, vertical = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Avatar(person, 54)
+                            Column(Modifier.weight(1f)) {
+                                Text(person.name, fontSize = 19.sp, fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(person.username.takeIf(String::isNotEmpty)?.let { "@$it" } ?: "Мой профиль",
+                                    fontSize = 13.sp, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            ProfileIcon("chevron", colors.onSurfaceVariant)
+                        }
+                        SettingsGroup {
+                            ProfileAction(SettingsPage.NOTIFICATIONS.title, "bell", onClick = { onPage(SettingsPage.NOTIFICATIONS) })
+                            ProfileDivider()
+                            SettingsSwitch("Тёмная тема", "moon", dark, onDark)
+                            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                                ProfileDivider()
+                                SettingsSwitch("Сохранять свои фото из чатов", "photo", autoSave) {
+                                    autoSave = it
+                                    photos.autoSave = it
+                                }
+                            }
+                        }
+                        SettingsGroup {
+                            val accent = when (updateStatus) {
+                                is UpdateStatus.Available, is UpdateStatus.Ready -> if (dark) Yellow else Color(0xFF785600)
+                                else -> colors.onSurface
+                            }
+                            ProfileAction(SettingsPage.UPDATES.title, "update", color = accent, onClick = { onPage(SettingsPage.UPDATES) })
+                            ProfileDivider()
+                            ProfileAction(SettingsPage.ABOUT.title, "info", onClick = { onPage(SettingsPage.ABOUT) })
+                        }
+                    }
+                    SettingsPage.NOTIFICATIONS -> SettingsGroup {
+                        SettingsSwitch("Скрывать текст уведомлений", "bell", privatePreview) {
+                            privatePreview = it
+                            store.prefs.edit().putBoolean("private_notification_preview", it).apply()
+                        }
+                        ProfileDivider()
+                        ProfileAction("Настройки уведомлений Android", "settings", onClick = {
+                            val intent = if (android.os.Build.VERSION.SDK_INT >= 26) {
+                                android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                            } else {
+                                android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    android.net.Uri.parse("package:${context.packageName}"))
+                            }
+                            context.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                        })
+                    }
+                    SettingsPage.UPDATES -> UpdateCard(updater)
+                    SettingsPage.ABOUT -> SettingsGroup {
+                        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text("Салом", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Версия ${updater.installedDisplayVersion}", fontSize = 14.sp, color = colors.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface), content = content)
+}
+
+@Composable
+private fun SettingsSwitch(title: String, icon: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    ProfileAction(title, icon, checked = checked, onClick = { onCheckedChange(!checked) }, trailing = {
+        Switch(checked = checked, onCheckedChange = null,
+            colors = SwitchDefaults.colors(checkedTrackColor = Yellow, checkedThumbColor = Ink))
+    })
+}
+
 
 @Composable
 private fun NavIcon(index: Int, color: Color, modifier: Modifier = Modifier.size(24.dp)) {

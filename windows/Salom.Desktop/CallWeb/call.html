@@ -4,12 +4,114 @@
 <style>
 :root{color-scheme:dark;font:16px Segoe UI,Arial;background:#11161d;color:#edf1f5}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;flex-direction:column;background:radial-gradient(ellipse at 50% 15%,#263747,#11161d 65%)}
 header{padding:20px;text-align:center;font-size:20px;font-weight:650}.video{position:relative;flex:1;min-height:340px;margin:0 14px 14px;border-radius:20px;overflow:hidden;background:#19212b;display:grid;place-items:center}video{width:100%;height:100%;object-fit:cover}.remote{position:absolute;inset:0}.local{position:absolute;right:12px;bottom:12px;width:29%;height:24%;min-width:100px;min-height:110px;border:2px solid #ffc400;border-radius:14px;background:#10151b}.avatar{color:#ffc400;font-size:64px}.controls{display:flex;justify-content:center;gap:14px;padding:18px 10px 26px}.controls button{border:0;border-radius:50%;width:56px;height:56px;background:#293544;color:white;display:grid;place-items:center;cursor:pointer}.controls button svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.controls button.off{background:#485260;color:#aeb9c4}.controls .end{background:#d94048}.controls .end svg{transform:rotate(135deg)}.hint{text-align:center;color:#9ba8b7;margin:-12px 0 12px;font-size:13px}
+[hidden]{display:none!important}
 </style>
 <header>САЛОМ · ЗВОНОК</header><main class="video"><div class="avatar" id="avatar">С</div><video class="remote" id="remote" autoplay playsinline></video><video class="local" id="local" autoplay playsinline muted></video></main><div class="hint" id="hint">Запрашиваем доступ к микрофону и камере…</div><nav class="controls"><button id="mute" title="Микрофон" aria-label="Микрофон"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></button><button id="camera" title="Камера" aria-label="Камера"><svg viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg></button><button id="end" class="end" title="Завершить" aria-label="Завершить"><svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7l.5 3a2 2 0 0 1-.6 1.8L7.1 10a16 16 0 0 0 6.9 6.9l1.5-1.9a2 2 0 0 1 1.8-.6l3 .5a2 2 0 0 1 1.7 2z"/></svg></button></nav>
 <script>
-let pc,localStream,started=false,remoteReady=false,pending=[];const $=id=>document.getElementById(id);const send=m=>window.chrome.webview.postMessage(m);const setState=value=>send({type:'state',value});
-async function salomStart(iceJson,isCaller){if(started)return;started=true;try{const ice=JSON.parse(iceJson);pc=new RTCPeerConnection({iceServers:ice});pc.onicecandidate=e=>{if(e.candidate)send({type:'signal',kind:'ice',payload:{sdp_mid:e.candidate.sdpMid,sdp_mline_index:e.candidate.sdpMLineIndex,candidate:e.candidate.candidate}})};pc.ontrack=e=>{$('remote').srcObject=e.streams[0];$('avatar').hidden=true};pc.onconnectionstatechange=()=>setState(pc.connectionState==='connected'?'connected':pc.connectionState==='failed'?'failed':pc.connectionState);try{localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:true})}catch(_){localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});$('hint').textContent='Звонок без камеры'}$('local').srcObject=localStream;localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));if(isCaller)$('hint').textContent='Ожидание ответа…'}catch(e){send({type:'error',value:e.message});$('hint').textContent='Проверь разрешение микрофона';}}
-async function salomCreateOffer(){try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);send({type:'signal',kind:'offer',payload:{type:offer.type,sdp:offer.sdp}})}catch(e){send({type:'error',value:e.message})}}
-async function salomReceive(raw){try{const {kind,payload}=JSON.parse(raw);if(kind==='offer'){await pc.setRemoteDescription(payload);remoteReady=true;for(const c of pending)await pc.addIceCandidate(c);pending=[];const answer=await pc.createAnswer();await pc.setLocalDescription(answer);send({type:'signal',kind:'answer',payload:{type:answer.type,sdp:answer.sdp}})}else if(kind==='answer'){await pc.setRemoteDescription(payload);remoteReady=true;for(const c of pending)await pc.addIceCandidate(c);pending=[]}else if(kind==='ice'){const c=new RTCIceCandidate({sdpMid:payload.sdp_mid,sdpMLineIndex:payload.sdp_mline_index,candidate:payload.candidate});if(remoteReady)await pc.addIceCandidate(c);else pending.push(c)}}catch(e){send({type:'error',value:e.message})}}
-$('mute').onclick=()=>{const t=localStream?.getAudioTracks()[0];if(t){t.enabled=!t.enabled;$('mute').classList.toggle('off',!t.enabled)}};$('camera').onclick=()=>{const t=localStream?.getVideoTracks()[0];if(t){t.enabled=!t.enabled;$('camera').classList.toggle('off',!t.enabled)}};$('end').onclick=()=>{localStream?.getTracks().forEach(t=>t.stop());pc?.close();send({type:'hangup'})};
+let pc, localStream, started = false, stopped = false, offered = false;
+let remoteReady = false;
+const pending = [];
+const remoteStream = new MediaStream();
+const $ = id => document.getElementById(id);
+const send = message => window.chrome.webview.postMessage(message);
+
+async function salomStart(iceJson, isCaller, video) {
+    if (started) return;
+    started = true;
+    $('camera').hidden = !video;
+    $('local').hidden = true;
+    $('remote').hidden = !video;
+    $('hint').textContent = video ? 'Подключаем микрофон и камеру…' : 'Подключаем микрофон…';
+    try {
+        pc = new RTCPeerConnection({iceServers: JSON.parse(iceJson)});
+        pc.onicecandidate = ({candidate}) => {
+            if (candidate && !stopped) send({
+                type: 'signal', kind: 'ice', payload: {
+                    sdp_mid: candidate.sdpMid, sdp_mline_index: candidate.sdpMLineIndex, candidate: candidate.candidate
+                }
+            });
+        };
+        $('remote').srcObject = remoteStream;
+        pc.ontrack = ({track}) => {
+            remoteStream.addTrack(track);
+            if (video && track.kind === 'video') $('avatar').hidden = true;
+        };
+        pc.onconnectionstatechange = () => {
+            if (!stopped) send({type: 'state', value: pc.connectionState});
+        };
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({audio: true, video});
+        } catch (problem) {
+            if (!video || stopped) throw problem;
+            localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
+        }
+        if (stopped) { localStream.getTracks().forEach(track => track.stop()); return; }
+        const hasVideo = localStream.getVideoTracks().length > 0;
+        $('camera').hidden = !hasVideo;
+        $('local').hidden = !hasVideo;
+        if (hasVideo) $('local').srcObject = localStream;
+        for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+        if (video && !hasVideo && isCaller) pc.addTransceiver('video', {direction: 'recvonly'});
+        $('hint').textContent = video && !hasVideo ? 'Камера недоступна' : isCaller ? 'Ожидание ответа…' : '';
+        send({type: 'ready'});
+    } catch (error) {
+        if (!stopped) send({type: 'error', value: error.message});
+    }
+}
+
+async function salomCreateOffer() {
+    if (!pc || stopped || offered) return;
+    offered = true;
+    try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        if (!stopped) send({type: 'signal', kind: 'offer', payload: {type: offer.type, sdp: offer.sdp}});
+    } catch (error) {
+        if (!stopped) send({type: 'error', value: error.message});
+    }
+}
+
+let signaling = Promise.resolve();
+function salomReceive(raw) {
+    signaling = signaling.then(async () => {
+        if (!pc || stopped) return;
+        const {kind, payload} = JSON.parse(raw);
+        if (kind === 'ice') {
+            const ice = {sdpMid: payload.sdp_mid, sdpMLineIndex: payload.sdp_mline_index, candidate: payload.candidate};
+            if (remoteReady) await pc.addIceCandidate(ice);
+            else if (pending.length < 128) pending.push(ice);
+        } else if ((kind === 'offer' || kind === 'answer') && !remoteReady) {
+            await pc.setRemoteDescription(payload);
+            remoteReady = true;
+            for (const ice of pending.splice(0)) await pc.addIceCandidate(ice);
+            if (kind === 'offer') {
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                if (!stopped) send({type: 'signal', kind: 'answer', payload: {type: answer.type, sdp: answer.sdp}});
+            }
+        }
+    }).catch(error => {
+        if (!stopped) send({type: 'error', value: error.message});
+    });
+}
+
+function salomStop() {
+    if (stopped) return false;
+    stopped = true;
+    localStream?.getTracks().forEach(track => track.stop());
+    pc?.close();
+    $('local').srcObject = null;
+    $('remote').srcObject = null;
+    return true;
+}
+$('mute').onclick = () => {
+    const track = localStream?.getAudioTracks()[0];
+    if (track) { track.enabled = !track.enabled; $('mute').classList.toggle('off', !track.enabled); }
+};
+$('camera').onclick = () => {
+    const track = localStream?.getVideoTracks()[0];
+    if (track) { track.enabled = !track.enabled; $('camera').classList.toggle('off', !track.enabled); }
+};
+$('end').onclick = () => { if (salomStop()) send({type: 'hangup'}); };
+window.addEventListener('pagehide', salomStop);
 </script></html>

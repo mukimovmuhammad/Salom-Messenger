@@ -70,6 +70,14 @@ html.has-js [data-reveal].is-visible{opacity:1;transform:translate3d(0,0,0)}
 @media(max-height:700px) and (max-width:820px){.hero{padding-top:26px}.stage{height:410px}.phone{transform:rotate(-5deg) scale(.82)}}
 @media(prefers-reduced-motion:reduce){html.has-js [data-reveal],html.has-js [data-reveal].is-visible{opacity:1;transform:none;transition:none!important}.scroll-progress span{will-change:auto}}
 .download-row{display:flex;flex-wrap:wrap;gap:10px}.download.windows{background:#fff;color:var(--ink);border:1px solid var(--line)}.download.windows .arrow-disc{background:#f1f1e8}
+ .android-choices{margin-top:18px;padding:16px;border:1px solid #e6dfd1;border-radius:18px;background:#fffaf0;color:#211d17}
+.android-choices h3{margin:0;font-size:1rem}
+.android-choices p{margin:5px 0 12px;font-size:.86rem;line-height:1.45}
+.android-choice-links{display:flex;flex-wrap:wrap;gap:8px}
+.android-choice-links a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:5px 10px;border:1px solid #dcd1b7;border-radius:10px;background:#fff;color:inherit;text-decoration:none;font-weight:700}
+.android-choice-links small{font-size:.72rem;font-weight:500}
+.android-choice-links a:hover,.android-choice-links a[data-recommended]{background:#fff0b5;border-color:#ba8a00}
+.android-choice-links a[hidden]{display:none}
 </style>
 </head>
 <body id="top">
@@ -83,39 +91,85 @@ html.has-js [data-reveal].is-visible{opacity:1;transform:translate3d(0,0,0)}
 </defs></svg>
 <header class="header wrap"><a href="#top" class="brand" aria-label="Салом — на главную"><span class="brand-mark"><svg aria-hidden="true"><use href="#logo"/></svg></span>Салом</a><nav class="header-nav" aria-label="Навигация"><a href="#inside">Что внутри</a><a href="#install">Как установить</a><a href="#install" class="nav-download">Скачать<svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></a></nav></header>
 <main>
-<section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy" data-reveal="left"><div class="eyebrow"><span class="status-dot" aria-hidden="true"></span>Android и Windows · ранний доступ</div><h1 id="hero-title">Просто скажи<br><em>Салом.</em></h1><p>Находи своих по username. Пиши друзьям. Сохраняй важное — начни с простого приветствия.</p><div class="download-row"><a class="download" id="hero-download" href="/salom/salom-0.15.4.apk" download="SALOM-0.15.4.apk"><span>Скачать для Android<small>APK · <span data-size>55,06 МБ</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a><a class="download windows" id="windows-download" href="/salom/SALOM-0.15.2-CallFix-Setup.exe" download="SALOM-0.15.2-CallFix-Setup.exe"><span>Скачать для Windows<small>Установщик · <span data-windows-size>—</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a></div><div class="download-meta"><span>Версия <span data-version>0.15.4 Beta</span></span><span class="meta-separator">·</span><span>Android 7.0+</span><span class="meta-separator">·</span><span>Windows 11+</span></div><div class="hero-note"><strong>Android 0.15.4 Beta.</strong> Изменения в звонках ещё проверяются на реальных устройствах.</div></div>
+<section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy" data-reveal="left"><div class="eyebrow"><span class="status-dot" aria-hidden="true"></span>Android и Windows</div><h1 id="hero-title">Просто скажи<br><em>Салом.</em></h1><p>Находи своих по username. Пиши друзьям. Сохраняй важное — начни с простого приветствия.</p><div class="download-row"><a class="download" id="hero-download" data-android-primary href="/salom/salom-0.16.0.apk" download="SALOM-0.16.0.apk"><span>Скачать для Android<small><span data-android-kind>Универсальный</span> · <span data-size>APK</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a><a class="download windows" id="windows-download" href="/salom/SALOM-0.16.0-Release-Setup.exe" download="SALOM-0.16.0-Release-Setup.exe"><span>Скачать для Windows<small>Установщик · <span data-windows-size>Windows 11</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a></div><div class="download-meta"><span>Версия <span data-version>0.16.0 Stability</span></span><span class="meta-separator">·</span><span>Android 7.0+</span><span class="meta-separator">·</span><span>Windows 11+</span></div><div class="hero-note"><strong>SALOM 0.16.0 Stability.</strong> Полноэкранные звонки на Android, реакции и обновлённый профиль.</div></div>
 <div class="stage" data-reveal="right"><svg class="sunburst" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M50 4v21m0 50v21M4 50h21m50 0h21M17 17l15 15m36 36 15 15M17 83l15-15m36-36 15-15"/><circle cx="50" cy="50" r="12"/></svg><div class="hello" aria-hidden="true">Салом!</div><div class="phone" role="img" aria-label="Иллюстрация Избранного в Салом: жёлтый интерфейс и личные заметки"><div class="camera"></div><div class="phone-status"><span>9:41</span><span>▰</span></div><div class="phone-bar"><span class="phone-back">‹</span><span class="phone-avatar">★</span><div class="phone-name">Избранное<small>Только для тебя</small></div></div><div class="phone-body"><div class="phone-bubble note">Идея на завтра:<br>начать с хорошего 💡</div><div class="phone-bubble">Маленькая заметка.<br>Большие планы.<small>9:41</small></div><div class="phone-bubble">Салом! 💛<small>9:41</small></div></div><div class="phone-compose"><div class="phone-field">☺ &nbsp; Сообщение</div><span class="phone-send">↑</span></div><div class="phone-caption">Салом · Android</div></div><div class="sticker" aria-hidden="true">Жёлтый —<br>это настроение.<span>и немного солнца ☀</span></div><div class="stage-caption">Иллюстрация интерфейса</div></div></section>
-<div class="ribbon wrap" data-reveal aria-label="О приложении"><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#android"/></svg><strong>Настоящее Android-приложение</strong></div><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#feather"/></svg><strong>Версия <b data-version>0.15.4 Beta</b></strong><span>ранний доступ</span></div><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#spark"/></svg><strong>Свой характер</strong><span>тёплый и жёлтый</span></div></div>
+<div class="ribbon wrap" data-reveal aria-label="О приложении"><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#android"/></svg><strong>Настоящее Android-приложение</strong></div><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#feather"/></svg><strong>Версия <b data-version>0.16.0 Stability</b></strong></div><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#spark"/></svg><strong>Свой характер</strong><span>тёплый и жёлтый</span></div></div>
 <section class="inside wrap" data-reveal id="inside" aria-labelledby="inside-title"><div><div class="section-kicker">Уже в Салом</div><h2 id="inside-title">Меньше лишнего.<br>Больше твоего.</h2><p class="inside-intro">Понятные вещи, которыми приятно пользоваться. Без сложного начала.</p></div><div><article class="feature" data-reveal><span class="feature-index">01 /</span><div><h3>Свои находятся.<span class="mini-tag">УЖЕ РАБОТАЕТ</span></h3><p>Достаточно первых букв username. С @ или без — общий каталог поможет найти профиль с другого телефона.</p></div></article><article class="feature" data-reveal><span class="feature-index">02 /</span><div><h3>Важное не теряется.</h3><p>Мысль, список дел или маленькое напоминание. Отправляй всё в Избранное — заметки останутся на твоём устройстве.</p></div></article><article class="feature" data-reveal><span class="feature-index">03 /</span><div><h3>Близкие — под рукой.</h3><p>Открой телефонные контакты и поделись ссылкой на Салом. Доступ к адресной книге — только с твоего разрешения.</p></div></article></div></section>
-<section class="install wrap" data-reveal id="install" aria-labelledby="install-title"><div><div class="section-kicker">Установка</div><h2 id="install-title">Выбери своё<br><em>устройство.</em></h2><div class="download-row"><a class="download" href="/salom/salom-0.15.4.apk" download="SALOM-0.15.4.apk"><span>Скачать для Android<small>APK · <span data-size>55,06 МБ</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a><a class="download windows" href="/salom/SALOM-0.15.2-CallFix-Setup.exe" download="SALOM-0.15.2-CallFix-Setup.exe"><span>Скачать для Windows<small>Setup.exe · <span data-windows-size>—</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a></div></div><div><ol class="steps"><li><span class="step-number">1</span><div>Android<small>Скачай APK, открой файл и подтверди установку. Если появится запрос, разреши установку для этого файла.</small></div></li><li><span class="step-number">2</span><div>Windows 11<small>Запусти Setup.exe: он устанавливается в профиль пользователя без прав администратора.</small></div></li><li><span class="step-number">3</span><div>Первый вход<small>Для входа нажми «Продолжить с Google» и выбери аккаунт.</small></div></li></ol><p class="update-note"><strong>Важно для обновления Android:</strong> официальную версию 0.15.3 можно обновить без удаления приложения и локальных данных.</p></div></section>
-<section class="faq wrap" data-reveal aria-labelledby="faq-title"><div><div class="section-kicker">На всякий случай</div><h2 id="faq-title">Коротко<br>о главном.</h2></div><div><details><summary>Это приложение или сайт?</summary><p>Настоящее нативное приложение для Android и Windows. Здесь — только страница скачивания.</p></details><details><summary>Что нового в 0.15.4 Beta?</summary><p>Можно сменить аватар и сохранять фотографии в галерею Android 10 и новее. Изменения в аудио- и видеозвонках ещё требуют проверки на реальных устройствах.</p></details><details><summary>Можно обновить старую Android-версию?</summary><p>0.15.4 Beta устанавливается поверх официальной 0.15.3. Если подпись очень старой сборки отличается, Android не разрешит обновление. Проверь, какие данные сохранены, прежде чем удалять приложение.</p></details><details><summary>Что происходит с контактами?</summary><p>Имена и номера читаются из телефонной книги после твоего разрешения. Общий поиск использует имя и username профиля; контакты устройства не загружаются без разрешения.</p></details></div></section>
+<section class="install wrap" data-reveal id="install" aria-labelledby="install-title"><div><div class="section-kicker">Установка</div><h2 id="install-title">Выбери своё<br><em>устройство.</em></h2><div class="download-row"><a class="download" data-android-primary href="/salom/salom-0.16.0.apk" download="SALOM-0.16.0.apk"><span>Скачать для Android<small><span data-android-kind>Универсальный</span> · <span data-size>APK</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a><a class="download windows" href="/salom/SALOM-0.16.0-Release-Setup.exe" download="SALOM-0.16.0-Release-Setup.exe"><span>Скачать для Windows<small>Setup.exe · <span data-windows-size>Windows 11</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a></div></div><div><ol class="steps"><li><span class="step-number">1</span><div>Android<small>Скачай APK, открой файл и подтверди установку. Если появится запрос, разреши установку для этого файла.</small></div></li><li><span class="step-number">2</span><div>Windows 11<small>Запусти Setup.exe: он устанавливается в профиль пользователя без прав администратора.</small></div></li><li><span class="step-number">3</span><div>Первый вход<small>Для входа нажми «Продолжить с Google» и выбери аккаунт.</small></div></li></ol><div class="android-choices" aria-labelledby="android-choices-title">
+<h3 id="android-choices-title">Версии APK для Android</h3>
+<p data-device-abi aria-live="polite">Если не знаешь архитектуру телефона, выбери универсальный APK.</p>
+<div class="android-choice-links">
+<a data-abi="arm64-v8a" href="/salom/salom-0.16.0-arm64-v8a.apk" download>ARM64 <small>64 бит</small></a>
+<a data-abi="armeabi-v7a" href="/salom/salom-0.16.0-armeabi-v7a.apk" download>ARM32 <small>32 бита</small></a>
+<a data-abi="universal" href="/salom/salom-0.16.0.apk" download>Универсальный <small>APK</small></a>
+</div>
+</div><p class="update-note"><strong>Важно для обновления Android:</strong> официальную версию 0.15.7 можно обновить через настройки приложения. Подпись APK осталась прежней.</p></div></section>
+<section class="faq wrap" data-reveal aria-labelledby="faq-title"><div><div class="section-kicker">На всякий случай</div><h2 id="faq-title">Коротко<br>о главном.</h2></div><div><details><summary>Это приложение или сайт?</summary><p>Настоящее нативное приложение для Android и Windows. Здесь — только страница скачивания.</p></details><details><summary>Что нового в 0.16.0 Stability?</summary><p>В Android звонки открываются на весь экран. Обновлены настройки, профиль и выбор вложений. Реакции доступны на Android и Windows.</p></details><details><summary>Можно обновить старую Android-версию?</summary><p>Для обновления с официальной 0.15.7 открой «Настройки» в Саломе и нажми кнопку проверки обновлений. Если подпись очень старой сборки отличается, Android не разрешит обновление. Проверь, какие данные сохранены, прежде чем удалять приложение.</p></details><details><summary>Что происходит с контактами?</summary><p>Имена и номера читаются из телефонной книги после твоего разрешения. Общий поиск использует имя и username профиля; контакты устройства не загружаются без разрешения.</p></details></div></section>
 </main>
 <footer class="footer wrap" data-reveal><a href="#top" class="brand"><span class="brand-mark"><svg aria-hidden="true"><use href="#logo"/></svg></span>Салом</a><div class="footer-links"><a href="#install">Установка</a><a href="/salom/version.json">История версий</a><a href="/privacy">Конфиденциальность</a><a href="/terms">Условия</a><a href="mailto:mukimovstudio@gmail.com">Написать разработчику</a><a href="#top">Наверх ↑</a></div><div class="legal-note">© 2026 Салом. Приложение развивается — спасибо, что ты рядом.</div></footer>
-<aside class="mobile-download" aria-label="Скачать приложение"><div><strong>Салом для Android</strong><small><span data-version>0.15.4 Beta</span> · <span data-size>55,06 МБ</span></small></div><a href="/salom/salom-0.15.4.apk" download="SALOM-0.15.4.apk">Скачать<svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></a></aside>
+<aside class="mobile-download" aria-label="Скачать приложение"><div><strong>Салом для Android</strong><small><span data-version>0.16.0 Stability</span> · <span data-android-kind>Универсальный</span></small></div><a data-android-primary href="/salom/salom-0.16.0.apk" download="SALOM-0.16.0.apk">Скачать<svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></a></aside>
 <script>
 (() => {
   const hero = document.getElementById('hero-download');
   const bar = document.querySelector('.mobile-download');
   if ('IntersectionObserver' in window) new IntersectionObserver(entries => bar.classList.toggle('show', !entries[0].isIntersecting), { threshold: 0 }).observe(hero);
+  const abiLabels = { 'arm64-v8a': 'ARM64', 'armeabi-v7a': 'ARM32', universal: 'Универсальный' };
+  const sizeLabel = bytes => new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    .format(bytes / 1000000) + ' МБ';
+  const detectAndroidAbi = async () => {
+    const ua = navigator.userAgentData;
+    if (ua?.platform !== 'Android' || typeof ua.getHighEntropyValues !== 'function') return;
+    try {
+      const { architecture, bitness } = await ua.getHighEntropyValues(['architecture', 'bitness']);
+      if (architecture !== 'arm') return;
+      if (bitness === '64') return 'arm64-v8a';
+      if (bitness === '32') return 'armeabi-v7a';
+    } catch { /* Use the universal APK when the browser withholds device details. */ }
+  };
+  const deviceAbi = detectAndroidAbi();
   fetch('/salom/version.json', { cache: 'no-store' }).then(response => {
     if (!response.ok) throw new Error('metadata unavailable');
     return response.json();
   }).then(info => {
-    if (typeof info.version === 'string' && /^\d+\.\d+\.\d+$/.test(info.version)) {
-      const displayVersion = info.version + (typeof info.displayName === 'string' && info.displayName.length < 24 ? ' ' + info.displayName : '');
-      document.querySelectorAll('[data-version]').forEach(node => { node.textContent = displayVersion; });
-      document.querySelectorAll('a[download$=".apk"]').forEach(node => { node.href = '/salom/salom-' + info.version + '.apk'; node.download = 'SALOM-' + info.version + '.apk'; });
+    if (typeof info.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(info.version)) return;
+    const suffix = typeof info.displayName === 'string' && info.displayName ? ' ' + info.displayName : '';
+    document.querySelectorAll('[data-version]').forEach(node => { node.textContent = info.version + suffix; });
+
+    const variants = new Map([['universal', info.size]]);
+    for (const variant of Array.isArray(info.androidVariants) ? info.androidVariants : []) {
+      if (variant.abi === 'arm64-v8a' || variant.abi === 'armeabi-v7a') variants.set(variant.abi, variant.size);
     }
-    if (typeof info.windowsFile === 'string' && /^SALOM-[0-9.]+-CallFix-Setup\.exe$/.test(info.windowsFile)) {
+    const linkDownload = (element, abi) => {
+      const filename = 'salom-' + info.version + (abi === 'universal' ? '' : '-' + abi) + '.apk';
+      element.href = '/salom/' + filename;
+      element.download = filename;
+    };
+    const hasSize = abi => Number.isFinite(variants.get(abi)) && variants.get(abi) > 0;
+    const selectPrimary = abi => {
+      document.querySelectorAll('[data-android-primary]').forEach(node => linkDownload(node, abi));
+      document.querySelectorAll('[data-android-kind]').forEach(node => { node.textContent = abiLabels[abi]; });
+      if (hasSize(abi)) document.querySelectorAll('[data-size]').forEach(node => { node.textContent = sizeLabel(variants.get(abi)); });
+    };
+    document.querySelectorAll('[data-abi]').forEach(node => {
+      const abi = node.dataset.abi;
+      node.hidden = !hasSize(abi);
+      if (node.hidden) return;
+      linkDownload(node, abi);
+      node.querySelector('small').textContent = sizeLabel(variants.get(abi));
+    });
+    selectPrimary('universal');
+    deviceAbi.then(abi => {
+      if (!hasSize(abi)) return;
+      selectPrimary(abi);
+      document.querySelector('[data-abi="' + abi + '"]').setAttribute('data-recommended', '');
+      document.querySelector('[data-device-abi]').textContent = 'Для этого устройства рекомендуем ' + abiLabels[abi] + '.';
+    });
+
+    if (typeof info.windowsFile === 'string' && /^SALOM-[0-9.]+-(?:AllowCookie|CallFix|Release)-Setup\.exe$/.test(info.windowsFile)) {
       document.querySelectorAll('a[download$=".exe"]').forEach(node => { node.href = '/salom/' + info.windowsFile; node.download = info.windowsFile; });
     }
     if (Number.isFinite(info.windowsSize) && info.windowsSize > 0) {
-      const size = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(info.windowsSize / 1000000) + ' МБ';
-      document.querySelectorAll('[data-windows-size]').forEach(node => { node.textContent = size; });
-    }
-    if (Number.isFinite(info.size) && info.size > 0) {
-      const size = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(info.size / 1000000) + ' МБ';
-      document.querySelectorAll('[data-size]').forEach(node => { node.textContent = size; });
+      document.querySelectorAll('[data-windows-size]').forEach(node => { node.textContent = sizeLabel(info.windowsSize); });
     }
   }).catch(() => {});
 })();

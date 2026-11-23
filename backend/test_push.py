@@ -52,9 +52,12 @@ class PushTests(unittest.TestCase):
         self.dispatcher.project = 'qa-project'
         self.assertTrue(self.dispatcher.deliver_one())
         sent = self.dispatcher.session.sent[0]['message']
-        self.assertEqual(sent['data'], {'peer_id': self.ids[0], 'message_id': str(result['id'])})
-        self.assertEqual(sent['android']['notification']['channel_id'], 'salom_messages_ding_v1')
-        self.assertEqual(sent['android']['notification']['sound'], 'salom_ding')
+        self.assertEqual(sent['data']['peer_id'], self.ids[0])
+        self.assertEqual(sent['data']['message_id'], str(result['id']))
+        self.assertNotIn('notification', sent)
+        self.assertNotIn('notification', sent['android'])
+        self.assertIn('title', sent['data'])
+        self.assertIn('body', sent['data'])
         with app.connect() as db: self.assertEqual(db.execute('SELECT state FROM push_jobs').fetchone()[0], 'sent')
 
     def test_network_failure_retries_without_losing_message(self):
@@ -97,7 +100,7 @@ class PushTests(unittest.TestCase):
         self.assertEqual(self.dispatcher.session.sent, [])
         with app.connect() as db: self.assertEqual(db.execute('SELECT state FROM push_jobs').fetchone()[0], 'skipped')
 
-    def test_voice_notification_uses_voice_label_and_ding_sound(self):
+    def test_voice_notification_sends_label_to_client_for_display(self):
         attachment=str(uuid.uuid4())
         with app.connect() as db:
             db.execute("INSERT INTO attachments(id,owner_id,peer_id,name,mime,size,created,ready,kind,duration_ms,waveform) VALUES(?,?,?,?,?,?,?,1,'voice',1200,'[2,30,5]')", (attachment,self.ids[0],self.ids[1],'voice.m4a','audio/mp4',12,time.time()))
@@ -105,7 +108,7 @@ class PushTests(unittest.TestCase):
         self.dispatcher.session=Session(Response(200));self.dispatcher.project='qa-project'
         self.assertTrue(self.dispatcher.deliver_one())
         notification=self.dispatcher.session.sent[0]['message']
-        self.assertEqual(notification['notification']['body'],'Голосовое сообщение')
-        self.assertEqual(notification['android']['notification']['sound'],'salom_ding')
+        self.assertEqual(notification['data']['body'],'Голосовое сообщение')
+        self.assertNotIn('notification', notification['android'])
 
 if __name__ == '__main__': unittest.main()

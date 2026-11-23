@@ -6,6 +6,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+$version = [regex]::Match((Get-Content -Raw (Join-Path $repo 'android\app\build.gradle')), "versionName\s+'([0-9.]+)'").Groups[1].Value
+if (-not $version) { throw 'SALOM versionName not found.' }
 $profilePath = if ($SigningProfilePath) { $SigningProfilePath } else { Join-Path $env:LOCALAPPDATA 'SALOM\release-signing.dpapi' }
 if (-not (Test-Path -LiteralPath $profilePath -PathType Leaf)) { throw 'Protected SALOM signing profile was not found.' }
 
@@ -39,7 +41,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Android release build failed for ABI '$abi' ($LASTEXITCODE)." }
             $builtApk = Join-Path $repo 'android\app\build\outputs\apk\release\app-release.apk'
             if (-not (Test-Path -LiteralPath $builtApk -PathType Leaf)) { throw "Gradle did not produce the release APK for ABI '$abi'." }
-            $fileName = if ($abi) { "SALOM-0.15.4-$abi.apk" } else { 'SALOM-0.15.4.apk' }
+            $fileName = if ($abi) { "SALOM-$version-$abi.apk" } else { "SALOM-$version.apk" }
             $apk = Join-Path $releaseDir $fileName
             Copy-Item -LiteralPath $builtApk -Destination $apk -Force
             & $signer.FullName verify --verbose --print-certs $apk

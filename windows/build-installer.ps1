@@ -1,14 +1,17 @@
-param([string]$GoogleOAuthJsonPath, [string]$OAuthConfigPath)
+param([string]$GoogleOAuthJsonPath, [string]$OAuthConfigPath, [string]$AppPublishPath,
+      [string]$InstallerName = 'SALOM-0.15.5-Setup.exe')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $appProject = Join-Path $PSScriptRoot 'Salom.Desktop\Salom.Desktop.csproj'
-$appPublish = Join-Path $PSScriptRoot 'Salom.Desktop\artifacts\publish'
+$defaultPublish = Join-Path $PSScriptRoot 'Salom.Desktop\artifacts\publish'
+$appPublish = if ($AppPublishPath) { $AppPublishPath } else { $defaultPublish }
 $setupProject = Join-Path $PSScriptRoot 'Salom.Setup\Salom.Setup.csproj'
 $payloadDir = Join-Path $PSScriptRoot 'Salom.Setup\payload'
 $payload = Join-Path $payloadDir 'SalomDesktop.zip'
-$installerOut = Join-Path $repo 'outputs\SALOM-0.15.2-CallFix-Setup.exe'
+if ($InstallerName -notmatch '^SALOM-[a-zA-Z0-9.-]+\.exe$') { throw 'Invalid SALOM installer name.' }
+$installerOut = Join-Path (Join-Path $repo 'outputs') $InstallerName
 New-Item -ItemType Directory -Force -Path $payloadDir,(Split-Path -Parent $installerOut) | Out-Null
-$existingConfig = if ($OAuthConfigPath) { $OAuthConfigPath } else { Join-Path $appPublish 'salom.oauth.json' }
+$existingConfig = if ($OAuthConfigPath) { $OAuthConfigPath } else { Join-Path $defaultPublish 'salom.oauth.json' }
 $desktopOAuth = $null
 if ($GoogleOAuthJsonPath -and (Test-Path -LiteralPath $GoogleOAuthJsonPath)) {
     $googleOAuth = Get-Content -LiteralPath $GoogleOAuthJsonPath -Raw | ConvertFrom-Json
@@ -28,7 +31,7 @@ $oauthConfig.firebaseWebApiKey = $firebaseKey
 [IO.File]::WriteAllText($oauthConfigPath, ($oauthConfig | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
 Write-Output "Using existing Google Desktop OAuth client and Firebase project $($firebase.project_info.project_id)."
 try {
-dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true "-p:SalomOAuthConfigPath=$oauthConfigPath" -o $appPublish
+dotnet publish $appProject -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true "-p:SalomOAuthConfigPath=$oauthConfigPath" -o $appPublish
 if ($LASTEXITCODE -ne 0) { throw 'Desktop application publish failed.' }
 New-Item -ItemType Directory -Force -Path (Join-Path $appPublish 'assets') | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'assets\salom.ico') -Destination (Join-Path $appPublish 'assets\salom.ico') -Force

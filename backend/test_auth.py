@@ -195,6 +195,24 @@ class AuthTests(unittest.TestCase):
         with app.connect() as db:
             self.assertIsNone(db.execute('SELECT 1 FROM sessions WHERE token_hash=?', (account['session_token'],)).fetchone())
 
+    def test_devices_list_shows_only_my_active_sessions_without_credentials(self):
+        account = self.register()
+        second = self.client.post('/auth/identity', headers={'X-Salom-Device': 'Windows'},
+            json={'firebase_token': 'verified-google-fixture'}).json()
+        self.claims.update(sub='other-qa', email='other@example.invalid')
+        other = self.register('otherqa')
+        headers = {**self.headers(account), 'X-Salom-Device': 'Android / Itel QA'}
+        response = self.client.get('/auth/devices', headers=headers)
+        self.assertEqual(response.status_code, 200)
+        devices = response.json()['devices']
+        self.assertEqual({(row['label'], row['current']) for row in devices},
+                         {('Android · Itel QA', True), ('Windows', False)})
+        self.assertTrue(all(set(row) == {'label', 'current', 'created'} for row in devices))
+        self.assertEqual(len(self.client.get('/auth/devices', headers=self.headers(other)).json()['devices']), 1)
+        self.assertEqual(self.client.get('/auth/devices').status_code, 401)
+        self.assertEqual(self.client.post('/auth/logout', headers=self.headers(second)).status_code, 200)
+        self.assertEqual(len(self.client.get('/auth/devices', headers=headers).json()['devices']), 1)
+
     def test_email_code_is_hashed_and_has_five_minute_ttl(self):
         redis=MagicMock(); redis.set.return_value=True
         with patch.object(app.app.state,'redis_sync',redis,create=True), patch.dict(os.environ,{'BREVO_API_KEY':'fixture','BREVO_SENDER_EMAIL':'sender@example.invalid','SALOM_OTP_PEPPER':'x'*32}), patch('auth.requests.post') as mail:

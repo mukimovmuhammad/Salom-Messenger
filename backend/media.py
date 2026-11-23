@@ -2,6 +2,7 @@
 import json
 import base64
 import hashlib
+import logging
 import os
 from pathlib import Path
 import re
@@ -10,11 +11,20 @@ import time
 import uuid
 from fastapi import Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
+from database import PostgresConnection
 
 ROOT = Path(os.environ.get('SALOM_MEDIA', '/var/lib/salom-api/attachments'))
 MAX_FILE = 25 * 1024 * 1024
 MAX_ACCOUNT = 200 * 1024 * 1024
 MAX_AVATAR = 512 * 1024
+logger = logging.getLogger(__name__)
+
+
+def lock_sender(db, owner):
+    if isinstance(db, PostgresConnection):
+        db.execute('SELECT pg_advisory_xact_lock(83215, hashtext(?))', (owner,)).fetchone()
 
 def avatar_schema(db):
     db.execute("""CREATE TABLE IF NOT EXISTS profile_avatars(
@@ -33,14 +43,14 @@ def schema(db):
       peer_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
       through_id INTEGER NOT NULL, PRIMARY KEY(owner_id,peer_id));''')
     columns = {row[1] for row in db.execute('PRAGMA table_info(attachments)')}
-    for name, definition in [('kind', "TEXT NOT NULL DEFAULT 'file'"), ('duration_ms', 'INTEGER NOT NULL DEFAULT 0'), ('waveform', "TEXT NOT NULL DEFAULT '[]'")]:
+    for name, definition in [('kind', "TEXT NOT NULL DEFAULT 'file'"), ('duration_ms', 'INTEGER NOT NULL DEFAULT 0'), ('waveform', "TEXT NOT NULL DEFAULT '[]'"), ('sha256', 'TEXT')]:
         if name not in columns: db.execute('ALTER TABLE attachments ADD COLUMN ' + name + ' ' + definition)
     if 'attachment_id' not in {row[1] for row in db.execute('PRAGMA table_info(messages)')}:
         db.execute('ALTER TABLE messages ADD COLUMN attachment_id TEXT REFERENCES attachments(id)')
 
 def metadata(db, attachment_id):
     if not attachment_id: return None
-    row = db.execute('SELECT id,name,mime,size,kind,duration_ms,waveform FROM attachments WHERE id=? AND ready=1', (attachment_id,)).fetchone()
+    row = db.execute('SELECT id,name,mime,size,kind,duration_ms,waveform,sha256 FROM attachments WHERE id=? AND ready=1', (attachment_id,)).fetchone()
     if not row: return None
     result = dict(row)
     result['waveform'] = json.loads(result['waveform'])
@@ -98,6 +108,52 @@ def verified_mime(declared: str, prefix: bytes, filename: str) -> str:
         raise HTTPException(400, "Содержимое файла не соответствует его типу")
     return actual
 
+
+def mp4_audio_only(path, length):
+    """Android recorders may use isom/mp42 even for an AAC-only recording."""
+    with path.open('rb') as source:
+        remaining_boxes = 512
+
+        def children(start, end):
+            nonlocal remaining_boxes
+            while start + 8 <= end:
+                remaining_boxes -= 1
+                if remaining_boxes < 0:
+                    raise ValueError('Too many MP4 boxes')
+                source.seek(start)
+                raw = source.read(8)
+                size = int.from_bytes(raw[:4], 'big')
+                header = 8
+                if size == 1:
+                    size = int.from_bytes(source.read(8), 'big')
+                    header = 16
+                if size == 0:
+                    size = end - start
+                if size < header or start + size > end:
+                    raise ValueError('Invalid MP4 box size')
+                yield raw[4:8], start + header, start + size
+                start += size
+
+        handlers = set()
+        try:
+            for kind, start, end in children(0, length):
+                if kind != b'moov':
+                    continue
+                for kind, track, track_end in children(start, end):
+                    if kind != b'trak':
+                        continue
+                    for kind, media_start, media_end in children(track, track_end):
+                        if kind != b'mdia':
+                            continue
+                        for kind, handler, handler_end in children(media_start, media_end):
+                            if kind == b'hdlr' and handler + 12 <= handler_end:
+                                source.seek(handler + 8)
+                                handlers.add(source.read(4))
+        except ValueError:
+            return False
+        return b'soun' in handlers and b'vide' not in handlers
+
+
 def install_routes(app, connect, current_profile, throttle):
     @app.put('/profiles/me/avatar')
     async def put_avatar(request: Request, authorization: str | None = Header(default=None)):
@@ -132,7 +188,7 @@ def install_routes(app, connect, current_profile, throttle):
                         headers={'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'public, max-age=60'})
 
     @app.post('/attachments')
-    async def upload(request: Request, peer_id: str = Query(min_length=36, max_length=36), name: str = Query(min_length=1, max_length=180), kind: str = Query(default='file', pattern='^(file|voice)$'), duration_ms: int = Query(default=0, ge=0, le=300000), waveform: str = Query(default='', max_length=160), authorization: str | None = Header(default=None)):
+    async def upload(request: Request, peer_id: str = Query(min_length=36, max_length=36), name: str = Query(min_length=1, max_length=180), kind: str = Query(default='file', pattern='^(file|voice)$'), duration_ms: int = Query(default=0, ge=0, le=300000), waveform: str = Query(default='', max_length=160), upload_id: uuid.UUID | None = Query(default=None), authorization: str | None = Header(default=None)):
         owner = current_profile(authorization)['id']
         throttle('upload-attachment:' + owner, limit=12)
         try: uuid.UUID(peer_id)
@@ -153,20 +209,33 @@ def install_routes(app, connect, current_profile, throttle):
         if reserved <= 0 or reserved > MAX_FILE: raise HTTPException(413, 'Максимальный размер файла — 25 МБ')
         ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
         if shutil.disk_usage(ROOT).free < MAX_FILE + 512 * 1024 * 1024: raise HTTPException(503, 'Хранилище временно недоступно')
-        attachment_id = str(uuid.uuid4())
+        expected_hash = request.headers.get('x-content-sha256', '').lower()
+        if (upload_id or expected_hash) and not re.fullmatch('[0-9a-f]{64}', expected_hash):
+            raise HTTPException(400, 'Неверная контрольная сумма файла')
+        attachment_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f'salom-attachment:{owner}:{upload_id}') if upload_id else uuid.uuid4())
         with connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            lock_sender(db, owner)
             if not db.execute('SELECT 1 FROM profiles WHERE id=? AND is_active=1', (peer_id,)).fetchone(): raise HTTPException(404, 'Получатель недоступен')
-            stale = db.execute('SELECT id FROM attachments WHERE created<? AND NOT EXISTS(SELECT 1 FROM messages WHERE attachment_id=attachments.id)', (time.time()-86400,)).fetchall()
+            stale = db.execute('SELECT id FROM attachments WHERE owner_id=? AND created<? AND NOT EXISTS(SELECT 1 FROM messages WHERE attachment_id=attachments.id) LIMIT 32', (owner, time.time()-86400)).fetchall()
             for row in stale:
-                (ROOT / row['id']).unlink(missing_ok=True)
                 db.execute('DELETE FROM attachments WHERE id=?', (row['id'],))
+                (ROOT / row['id']).unlink(missing_ok=True)
+            existing = db.execute('SELECT * FROM attachments WHERE id=?', (attachment_id,)).fetchone()
+            if existing:
+                if not existing['ready']:
+                    raise HTTPException(409, 'Файл уже загружается. Повтори позже')
+                if (existing['peer_id'], existing['name'], existing['size'], existing['kind'], existing['duration_ms'],
+                    existing['waveform'], existing['sha256']) != (peer_id, filename, reserved, kind, duration_ms, json.dumps(peaks), expected_hash):
+                    raise HTTPException(409, 'Этот идентификатор уже использован для другого файла')
+                return metadata(db, attachment_id)
             used = db.execute('SELECT COALESCE(SUM(size),0) FROM attachments WHERE owner_id=?', (owner,)).fetchone()[0]
             if used + reserved > MAX_ACCOUNT: raise HTTPException(413, 'Лимит вложений аккаунта — 200 МБ')
             db.execute('INSERT INTO attachments(id,owner_id,peer_id,name,mime,size,created,ready,kind,duration_ms,waveform) VALUES(?,?,?,?,?,?,?,0,?,?,?)', (attachment_id, owner, peer_id, filename, mime, reserved, time.time(), kind, duration_ms, json.dumps(peaks)))
         path = ROOT / attachment_id
         complete = False
         first_chunk = bytearray()
+        digest = hashlib.sha256()
         try:
             total = 0
             with path.open('xb') as output:
@@ -176,18 +245,38 @@ def install_routes(app, connect, current_profile, throttle):
                     if total > reserved or total > MAX_FILE: raise HTTPException(413, 'Максимальный размер файла — 25 МБ')
                     if len(first_chunk) < 4096:
                         first_chunk.extend(chunk[:4096 - len(first_chunk)])
-                    output.write(chunk)
+                    digest.update(chunk)
+                    await run_in_threadpool(output.write, chunk)
             if total == 0: raise HTTPException(400, 'Файл пустой')
-            mime = verified_mime(mime, bytes(first_chunk), filename)
+            if request.headers.get('content-length') and total != reserved:
+                raise HTTPException(400, 'Файл загружен не полностью')
+            checksum = digest.hexdigest()
+            if expected_hash and checksum != expected_hash:
+                raise HTTPException(422, 'Контрольная сумма файла не совпала')
+            prefix = bytes(first_chunk)
+            if (kind == 'voice' and mime in ('audio/mp4', 'audio/x-m4a')
+                    and sniff_mime(prefix) == 'video/mp4' and await run_in_threadpool(mp4_audio_only, path, total)):
+                mime = 'audio/mp4'
+            else:
+                mime = verified_mime(mime, prefix, filename)
             with connect() as db:
-                db.execute('UPDATE attachments SET size=?,mime=?,ready=1 WHERE id=?', (total, mime, attachment_id))
+                db.execute('UPDATE attachments SET size=?,mime=?,sha256=?,ready=1 WHERE id=?', (total, mime, checksum, attachment_id))
                 result = metadata(db, attachment_id)
             complete = True
             return result
+        except ClientDisconnect:
+            raise HTTPException(400, 'Загрузка прервана') from None
+        except OSError as exc:
+            logger.warning('Attachment write failed, errno=%s', exc.errno)
+            raise HTTPException(503, 'Хранилище временно недоступно') from None
         finally:
             if not complete:
-                path.unlink(missing_ok=True)
-                with connect() as db: db.execute('DELETE FROM attachments WHERE id=?', (attachment_id,))
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning('Interrupted upload cleanup failed, errno=%s', exc.errno)
+                else:
+                    with connect() as db: db.execute('DELETE FROM attachments WHERE id=?', (attachment_id,))
 
     @app.get('/attachments/{attachment_id}')
     def download(attachment_id: uuid.UUID, authorization: str | None = Header(default=None)):
@@ -197,12 +286,16 @@ def install_routes(app, connect, current_profile, throttle):
             if not attachment: raise HTTPException(404, 'Файл недоступен')
             peer = attachment['peer_id'] if attachment['owner_id'] == owner else attachment['owner_id']
             message = db.execute('SELECT id FROM messages WHERE attachment_id=?', (str(attachment_id),)).fetchone()
-            allowed = owner in (attachment['owner_id'], attachment['peer_id']) and message and message['id'] > cutoff(db, owner, peer)
+            hidden = message and db.execute('SELECT 1 FROM message_hides WHERE owner_id=? AND message_id=?', (owner, message['id'])).fetchone()
+            allowed = owner in (attachment['owner_id'], attachment['peer_id']) and message and not hidden and message['id'] > cutoff(db, owner, peer)
             pending_owner = owner == attachment['owner_id'] and not message
             if not (allowed or pending_owner): raise HTTPException(404, 'Файл недоступен')
         path = ROOT / str(attachment_id)
         if not path.is_file(): raise HTTPException(404, 'Файл недоступен')
-        return FileResponse(path, media_type=attachment['mime'], filename=attachment['name'], headers={'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
+        headers = {'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'}
+        if attachment['sha256']:
+            headers['X-Content-SHA256'] = attachment['sha256']
+        return FileResponse(path, media_type=attachment['mime'], filename=attachment['name'], headers=headers)
 
     @app.delete('/messages')
     def clear(peer_id: uuid.UUID, authorization: str | None = Header(default=None)):
