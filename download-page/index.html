@@ -1,212 +1,142 @@
 <!doctype html>
 <html lang="ru">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ffc400">
-<meta name="description" content="Салом для Android. Находи своих по username, сохраняй важное в Избранном. Скачать лёгкий нативный APK.">
-<meta property="og:title" content="Салом — просто скажи Салом"><meta property="og:description" content="Тёплый жёлтый стиль. Настоящее Android-приложение."><meta property="og:type" content="website"><meta property="og:url" content="https://mukimov.site/">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23ffc400'/%3E%3Cpath d='M15 17h34v24H30l-12 9V41h-3z' fill='%2323241e'/%3E%3C/svg%3E">
-<title>Салом — скачать для Android</title>
-<script>document.documentElement.classList.add('has-js');</script>
-<style>
-:root{--yellow:#ffc400;--ink:#23241e;--muted:#76776a;--paper:#fafaf5;--line:#e5e6dc}
-*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:28px}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}a{color:inherit;text-decoration:none}button{font:inherit}svg{display:block;flex-shrink:0}a{-webkit-tap-highlight-color:transparent}a:focus-visible,summary:focus-visible{outline:3px solid #857000;outline-offset:5px}::selection{background:var(--yellow);color:var(--ink)}.wrap{width:min(1160px,calc(100% - 64px));margin-inline:auto}.sprite{position:absolute;width:0;height:0;overflow:hidden}.icon{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.header{position:sticky;top:12px;z-index:20;height:76px;display:flex;align-items:center;justify-content:space-between;gap:24px;border:1px solid rgba(255,255,255,.72);border-radius:999px;padding-inline:22px;background:rgba(250,250,245,.72);backdrop-filter:blur(18px) saturate(1.35);-webkit-backdrop-filter:blur(18px) saturate(1.35);box-shadow:0 10px 35px rgba(35,36,30,.07);transition:background .2s,box-shadow .2s}.header.is-scrolled{background:rgba(250,250,245,.9);box-shadow:0 12px 38px rgba(35,36,30,.12)}.brand{display:flex;align-items:center;gap:11px;font-size:25px;letter-spacing:-1px;font-weight:780}.brand-mark{width:44px;height:44px;background:var(--yellow);border-radius:15px;display:grid;place-items:center}.brand-mark svg{width:29px;height:29px;fill:var(--ink)}.header-nav{display:flex;align-items:center;gap:30px;font-size:13px;font-weight:550}.header-nav>a:not(.nav-download){color:#65675a}.header-nav a:hover{opacity:.8}.nav-download{display:flex;align-items:center;gap:15px;background:var(--ink);color:#fff;border-radius:30px;padding:11px 19px}.nav-download .icon{width:16px;height:16px}
-.hero{display:grid;grid-template-columns:1.05fr 1fr;align-items:center;gap:44px;min-height:696px;padding-block:62px 76px}.eyebrow{display:flex;align-items:center;gap:9px;font-size:11px;letter-spacing:1.4px;font-weight:650;text-transform:uppercase}.status-dot{width:7px;height:7px;background:#899a51;border-radius:50%}.hero h1{font-size:clamp(52px,6.2vw,79px);font-weight:750;line-height:1.06;letter-spacing:-4.4px;margin:24px 0 25px}.hero h1 em{font-style:normal;position:relative;z-index:0;display:inline-block}.hero h1 em:after{content:"";position:absolute;z-index:-1;bottom:2px;left:-5px;right:-9px;height:26%;background:var(--yellow);border-radius:8px;transform:rotate(-2deg)}.hero-copy>p{color:#6d6e62;font-size:17px;line-height:1.8;max-width:420px;margin:0 0 28px}.download{display:inline-flex;align-items:center;justify-content:space-between;gap:22px;border-radius:21px;background:var(--yellow);color:var(--ink);padding:17px 19px 17px 24px;min-width:292px;transition:transform .16s,box-shadow .16s;font-size:15px;font-weight:750}.download:hover{transform:translateY(-2px);box-shadow:0 10px 24px #b795001c}.download small{display:block;font-size:10px;line-height:1.5;font-weight:500;opacity:.65;margin-top:2px}.arrow-disc{display:grid;place-items:center;background:#fff9da;width:42px;height:42px;border-radius:50%}.download-meta{font-size:11px;color:var(--muted);margin-top:13px;display:flex;gap:13px;align-items:center;flex-wrap:wrap}.meta-separator{opacity:.5}.hero-note{max-width:370px;margin-top:25px;color:#8b8c80;font-size:11px;line-height:1.6}.hero-note strong{font-weight:500;color:#686a5b}
-.stage{position:relative;height:550px;display:grid;place-items:center;isolation:isolate}.stage:before{content:"";position:absolute;inset:44px -6px 24px 0;background:var(--yellow);border-radius:46% 46% 38% 48%;transform:rotate(-7deg);z-index:-2}.stage:after{content:"";position:absolute;inset:18px 9px 47px 8px;border:1px solid #d9c65d;border-radius:47% 42% 49% 41%;transform:rotate(10deg);z-index:-3}.sunburst{position:absolute;right:1px;top:10px;width:80px;height:80px;transform:rotate(11deg)}.phone{width:258px;height:525px;background:#fff;border:7px solid var(--ink);outline:1px solid #fff5ba;border-radius:38px;box-shadow:14px 25px 0 #54470016,0 30px 60px #5144001c;transform:rotate(-5deg);overflow:hidden;position:relative}.phone-status{height:32px;padding:9px 17px 0;font-size:9px;font-weight:650;display:flex;justify-content:space-between;align-items:flex-start}.camera{position:absolute;width:8px;height:8px;background:#2b2c25;border-radius:50%;top:14px;left:calc(50% - 4px)}.phone-bar{padding:12px 13px 7px;display:flex;align-items:center;gap:8px}.phone-back{font-size:24px;line-height:1}.phone-avatar{width:27px;height:27px;border-radius:50%;background:var(--yellow);display:grid;place-items:center;font-size:17px}.phone-name{font-size:11px;font-weight:700}.phone-name small{display:block;font-size:7px;color:#949686;font-weight:400;margin-top:1px}.phone-body{height:349px;background:linear-gradient(150deg,#fff7d3,#f3f8ec);padding:15px 10px;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-end;gap:8px;position:relative;overflow:hidden}.phone-body:before{content:"✧";position:absolute;left:20px;top:35px;font-size:85px;line-height:1;color:#e6d784;transform:rotate(-12deg);opacity:.35}.phone-bubble{background:var(--yellow);border-radius:15px 15px 4px 15px;padding:11px 13px;font-size:11px;line-height:1.5;max-width:180px;position:relative}.phone-bubble small{display:block;text-align:right;color:#86750c;font-size:7px;margin-top:5px}.phone-bubble.note{background:#fff;align-self:flex-start;border-radius:15px 15px 15px 4px;color:#62644f;font-size:10px}.phone-compose{height:49px;display:flex;align-items:center;gap:5px;padding:7px;background:#f3f8ec}.phone-field{background:white;border-radius:24px;padding:8px 11px;color:#9c9d90;font-size:10px;flex:1}.phone-send{width:30px;height:30px;background:var(--yellow);border-radius:50%;display:grid;place-items:center;font-size:17px}.phone-caption{position:absolute;bottom:4px;width:100%;text-align:center;font-size:6px;color:#a2a496}.sticker{position:absolute;right:-4px;bottom:85px;background:#fff;padding:14px 18px;border-radius:20px;box-shadow:0 8px 35px #62530014;transform:rotate(8deg);font-size:13px;font-weight:700;line-height:1.5}.sticker span{display:block;color:#9b9d8d;font-size:9px;font-weight:400}.hello{position:absolute;left:2px;top:68px;font-size:36px;font-weight:750;letter-spacing:-2px;transform:rotate(-14deg);z-index:2}.stage-caption{position:absolute;bottom:-19px;font-size:9px;color:#92947f;letter-spacing:.3px}
-.ribbon{border-block:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;padding-block:23px;margin-bottom:92px}.ribbon-item{display:flex;align-items:center;gap:11px;font-size:12px}.ribbon-item .icon{width:19px;height:19px;color:#8b8e74}.ribbon-item strong{font-weight:650}.ribbon-item span{color:#92947e;margin-left:5px}.inside{display:grid;grid-template-columns:.9fr 1.1fr;gap:90px;padding-bottom:94px}.section-kicker{font-size:10px;text-transform:uppercase;letter-spacing:2px;font-weight:650;color:#92947e;margin-bottom:18px}.inside h2,.faq h2{font-size:clamp(30px,3.2vw,43px);line-height:1.2;font-weight:700;letter-spacing:-1.7px;margin:0}.inside-intro{color:var(--muted);font-size:14px;max-width:300px;margin-top:20px}.feature{display:grid;grid-template-columns:35px 1fr;gap:15px;border-bottom:1px solid var(--line);padding:0 0 25px;margin-bottom:25px}.feature:last-child{margin-bottom:0}.feature-index{font-size:11px;font-weight:600;color:#a6a88e;padding-top:6px}.feature h3{font-size:19px;letter-spacing:-.4px;font-weight:650;margin:0 0 8px}.feature p{font-size:13px;line-height:1.75;color:var(--muted);margin:0;max-width:400px}.mini-tag{display:inline-block;font-size:9px;letter-spacing:.3px;padding:2px 7px;border-radius:6px;background:#ecefdc;color:#6b7550;margin-left:8px;vertical-align:3px}
-.install{border-radius:34px;background:var(--ink);color:#fff;padding:49px 52px 43px;display:grid;grid-template-columns:1fr 1fr;gap:70px;overflow:hidden}.install .section-kicker{color:#999e88}.install h2{font-size:36px;line-height:1.2;letter-spacing:-1.4px;font-weight:650;margin:0 0 23px}.install h2 em{font-style:normal;color:var(--yellow)}.install .download{min-width:260px;padding-top:13px;padding-bottom:13px;border-radius:17px}.install .arrow-disc{width:35px;height:35px}.steps{margin:0;padding:0;list-style:none}.steps li{display:flex;gap:15px;margin-bottom:24px;font-size:14px;font-weight:600}.step-number{border:1px solid #5e6151;width:26px;height:26px;flex-shrink:0;border-radius:50%;display:grid;place-items:center;font-size:10px;color:#d5d9c5;margin-top:1px}.steps small{display:block;font-size:12px;line-height:1.6;color:#a4a895;font-weight:400;margin-top:3px}.update-note{border-top:1px solid #46483d;padding-top:18px;font-size:11px;color:#a5a991;line-height:1.7;margin:0}.update-note strong{color:#dce1cc;font-weight:500}.faq{display:grid;grid-template-columns:.9fr 1.1fr;gap:90px;padding-block:88px 65px}.faq h2{font-size:34px}.faq details{border-bottom:1px solid var(--line);padding-block:17px}.faq details:first-child{padding-top:0}.faq summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:20px;align-items:center;font-size:14px;font-weight:550}.faq summary::-webkit-details-marker{display:none}.faq summary:after{content:"+";font-size:22px;font-weight:400;color:#92947f}.faq details[open] summary:after{content:"−"}.faq details p{font-size:13px;color:var(--muted);line-height:1.8;margin:12px 25px 2px 0}.footer{border-top:1px solid var(--line);padding-block:25px 32px;display:flex;align-items:center;justify-content:space-between;gap:25px;font-size:11px;color:#8e907e}.footer .brand{font-size:19px;color:var(--ink)}.footer .brand-mark{width:32px;height:32px;border-radius:11px}.footer .brand-mark svg{width:23px;height:23px}.footer-links{display:flex;gap:24px}.footer a:hover{color:var(--ink)}.legal-note{font-size:10px;color:#8b8d7e}.mobile-download{display:none}
-@media(min-width:1500px){.wrap{width:min(1220px,calc(100% - 100px))}.hero{gap:80px;min-height:745px}.stage{height:580px}.phone{transform:rotate(-5deg) scale(1.06)}}
-@media(max-width:980px){.wrap{width:calc(100% - 44px)}.hero{gap:25px;min-height:640px}.hero h1{font-size:61px;letter-spacing:-3px}.hero-copy>p{font-size:15px}.stage{height:500px;transform:scale(.91);transform-origin:center right}.inside,.faq{gap:45px}.install{gap:35px;padding:36px}.ribbon-item span{display:none}.header-nav{gap:22px}}
-@media(max-width:700px){.wrap{width:calc(100% - 36px)}.header{height:66px}.brand{font-size:23px}.brand-mark{width:39px;height:39px;border-radius:13px}.header-nav>a:not(.nav-download){display:none}.nav-download{font-size:11px;padding:9px 13px;gap:10px}.hero{grid-template-columns:1fr;gap:40px;padding:40px 0 45px;min-height:auto}.eyebrow{font-size:9px;letter-spacing:1.15px}.hero h1{font-size:clamp(48px,11.5vw,68px);letter-spacing:-2.9px;margin:23px 0}.hero-copy>p{font-size:15px;line-height:1.8;max-width:450px;margin-bottom:24px}.download{min-width:0;width:100%;padding:16px 19px 16px 22px}.download-meta{font-size:10px;gap:10px;justify-content:center}.hero-note{font-size:10px;max-width:100%;margin-top:19px;text-align:center}.stage{height:510px;transform:none;width:min(100%,400px);justify-self:center}.stage:before{inset:40px 0 22px}.stage:after{inset:27px 4px 35px}.phone{transform:rotate(-5deg) scale(.94)}.hello{font-size:30px;left:2px;top:79px}.sticker{font-size:12px;right:0;bottom:62px;padding:12px 14px}.sunburst{width:65px;height:65px;right:2px}.stage-caption{bottom:-8px}.ribbon{flex-wrap:wrap;gap:15px 20px;padding-block:21px;margin-bottom:54px;justify-content:flex-start}.ribbon-item{font-size:10px;gap:7px}.ribbon-item .icon{width:16px;height:16px}.inside{grid-template-columns:1fr;gap:30px;padding-bottom:50px}.section-kicker{font-size:9px;margin-bottom:12px}.inside h2{font-size:33px;letter-spacing:-1.2px}.inside-intro{max-width:100%;font-size:13px;margin-top:14px}.feature{grid-template-columns:25px 1fr;gap:10px;margin-bottom:19px;padding-bottom:20px}.feature h3{font-size:17px}.feature p{font-size:12px}.install{border-radius:25px;grid-template-columns:1fr;gap:35px;padding:29px 23px}.install h2{font-size:30px;letter-spacing:-1px;margin-bottom:20px}.install .download{min-width:0}.steps li{font-size:13px;margin-bottom:21px}.steps small{font-size:11px}.update-note{font-size:10px}.faq{grid-template-columns:1fr;gap:29px;padding-block:50px 44px}.faq h2{font-size:29px}.faq summary{font-size:13px}.faq details p{font-size:12px}.footer{flex-wrap:wrap;justify-content:space-between;padding-bottom:28px;gap:18px;margin-bottom:70px}.footer-links{gap:15px;font-size:10px}.legal-note{width:100%;font-size:9px}.mobile-download{position:fixed;z-index:5;bottom:12px;left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:#23241ef5;color:#fff;backdrop-filter:blur(12px);padding:10px 11px 10px 17px;border-radius:23px;box-shadow:0 8px 35px #0002;transform:translateY(150%);transition:transform .2s}.mobile-download.show{transform:translateY(0)}.mobile-download strong{font-size:13px;display:block;line-height:1.4}.mobile-download small{font-size:9px;color:#bec2af}.mobile-download a{font-size:12px;font-weight:650;background:var(--yellow);color:var(--ink);border-radius:15px;padding:12px 17px;display:flex;gap:15px;align-items:center}.mobile-download .icon{width:16px;height:16px}}
-@media(max-width:360px){.wrap{width:calc(100% - 28px)}.hero h1{font-size:45px;letter-spacing:-2.6px}.stage{height:475px}.phone{transform:rotate(-5deg) scale(.86)}.hello{font-size:27px}.sticker{font-size:10px}.ribbon{gap:12px}.hero-copy>p{font-size:14px}.brand{font-size:21px}.nav-download{padding:9px 11px}}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition:none!important;animation:none!important}}
-/* Mobile layout and scroll behavior */
-:root{--header-height:clamp(68px,9vh,96px);scroll-padding-top:calc(var(--header-height) + 14px)}
-body{overflow-x:clip}
-.header{position:sticky;top:0;z-index:20;height:var(--header-height);padding-top:env(safe-area-inset-top);background:rgba(250,250,245,.92);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);transition:box-shadow .25s ease}
-.header.is-scrolled{box-shadow:0 8px 24px #2727190d}
-[id]{scroll-margin-top:calc(var(--header-height) + 16px)}
-.scroll-progress{position:fixed;inset:0 0 auto;height:3px;z-index:60;background:transparent;pointer-events:none}
-.scroll-progress span{display:block;width:100%;height:100%;background:var(--yellow);transform:scaleX(0);transform-origin:left center;will-change:transform}
-.nav-download,.mobile-download a{min-height:44px}
-.faq summary{min-height:48px}
-html.has-js [data-reveal]{opacity:0;transform:translate3d(0,22px,0);transition:opacity .65s cubic-bezier(.2,.7,.2,1),transform .65s cubic-bezier(.2,.7,.2,1)}
-html.has-js [data-reveal="left"]{transform:translate3d(-24px,0,0)}
-html.has-js [data-reveal="right"]{transform:translate3d(24px,0,0)}
-html.has-js [data-reveal].is-visible{opacity:1;transform:translate3d(0,0,0)}
-.feature[data-reveal]:nth-of-type(2){transition-delay:80ms}.feature[data-reveal]:nth-of-type(3){transition-delay:150ms}
-@media(max-width:820px){
-  :root{--header-height:calc(70px + env(safe-area-inset-top))}
-  .wrap{width:calc(100% - 40px)}
-  .header{top:8px;height:66px;gap:12px;padding-inline:max(16px,env(safe-area-inset-left)) max(16px,env(safe-area-inset-right))}
-  .brand{font-size:22px}.brand-mark{width:38px;height:38px;border-radius:13px}
-  .header-nav{gap:8px}.header-nav>a:not(.nav-download){display:none}
-  .nav-download{font-size:12px;padding:9px 13px;gap:9px}
-  .hero{grid-template-columns:minmax(0,1fr);gap:24px;min-height:0;padding:38px 0 52px}
-  .hero-copy{max-width:600px;margin-inline:auto;width:100%}
-  .hero h1{font-size:clamp(48px,10vw,72px);letter-spacing:-.055em}
-  .hero-copy>p{font-size:15px;max-width:520px}
-  .download{width:100%;min-width:0;min-height:64px}
-  .hero-note{max-width:480px}
-  .stage{width:min(100%,480px);height:clamp(430px,112vw,510px);justify-self:center;transform:none}
-  .stage:before{inset:38px 0 22px}.stage:after{inset:24px 4px 34px}
-  .inside,.faq{grid-template-columns:minmax(0,1fr);gap:30px}
-  .inside{padding-bottom:62px}.inside-intro{max-width:520px}
-  .install{grid-template-columns:minmax(0,1fr);gap:30px;padding:clamp(24px,6vw,40px);border-radius:26px}
-  .install .download{width:100%;min-width:0}
-  .faq{padding-block:60px 48px}
-  .footer{margin-bottom:calc(84px + env(safe-area-inset-bottom))}
-  .mobile-download{left:max(10px,env(safe-area-inset-left));right:max(10px,env(safe-area-inset-right));bottom:calc(9px + env(safe-area-inset-bottom));padding:9px 10px 9px 15px}
-  .mobile-download a{padding:10px 15px}
-}
-@media(max-width:390px){
-  .wrap{width:calc(100% - 32px)}.hero{padding-top:30px}.hero h1{font-size:clamp(44px,12vw,52px);letter-spacing:-.06em}
-  .hero-copy>p{font-size:14px}.stage{height:clamp(410px,124vw,470px)}
-  .phone{transform:rotate(-5deg) scale(.86)}.hello{font-size:28px;top:76px}.sticker{right:0;bottom:58px;font-size:11px;padding:11px 13px}
-  .ribbon{gap:14px 18px}.ribbon-item{font-size:10px}.feature h3{font-size:16px}
-  .mobile-download strong{font-size:12px}.mobile-download small{font-size:8px}.mobile-download a{font-size:11px;gap:8px;padding-inline:12px}
-}
-@media(max-width:360px){.wrap{width:calc(100% - 28px)}.phone{transform:rotate(-5deg) scale(.82)}.stage{height:405px}.download-meta{gap:7px}.install{padding:24px 19px}.footer-links{gap:11px}}
-@media(max-height:700px) and (max-width:820px){.hero{padding-top:26px}.stage{height:410px}.phone{transform:rotate(-5deg) scale(.82)}}
-@media(prefers-reduced-motion:reduce){html.has-js [data-reveal],html.has-js [data-reveal].is-visible{opacity:1;transform:none;transition:none!important}.scroll-progress span{will-change:auto}}
-.download-row{display:flex;flex-wrap:wrap;gap:10px}.download.windows{background:#fff;color:var(--ink);border:1px solid var(--line)}.download.windows .arrow-disc{background:#f1f1e8}
- .android-choices{margin-top:18px;padding:16px;border:1px solid #e6dfd1;border-radius:18px;background:#fffaf0;color:#211d17}
-.android-choices h3{margin:0;font-size:1rem}
-.android-choices p{margin:5px 0 12px;font-size:.86rem;line-height:1.45}
-.android-choice-links{display:flex;flex-wrap:wrap;gap:8px}
-.android-choice-links a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:5px 10px;border:1px solid #dcd1b7;border-radius:10px;background:#fff;color:inherit;text-decoration:none;font-weight:700}
-.android-choice-links small{font-size:.72rem;font-weight:500}
-.android-choice-links a:hover,.android-choice-links a[data-recommended]{background:#fff0b5;border-color:#ba8a00}
-.android-choice-links a[hidden]{display:none}
-</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#161713">
+<meta name="description" content="Скачай Салом для Android и Windows. Личные чаты, голосовые сообщения, фото, реакции, аудио- и видеозвонки.">
+<meta property="og:title" content="Салом — мессенджер для Android и Windows">
+<meta property="og:description" content="Скачай Салом. Чаты, звонки и файлы в одном приложении.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mukimov.site/">
+<title>Салом — скачать для Android и Windows</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ffc400'/%3E%3Cpath d='M17 18h30a4 4 0 0 1 4 4v19H30l-9 8v-8h-4a4 4 0 0 1-4-4V22a4 4 0 0 1 4-4Z' fill='%23161713'/%3E%3Cpath d='M22 26h20v3H22zm0 7h14v3H22z' fill='%23ffc400'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/site-161.css">
+<script src="/site-161.js" defer></script>
 </head>
-<body id="top">
-<div class="scroll-progress" aria-hidden="true"><span></span></div>
-<svg class="sprite" aria-hidden="true"><defs>
-<symbol id="logo" viewBox="0 0 40 40"><path d="M8 8h24a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H21l-10 7v-7H8a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4Z"/><path d="M12 15h16v3H12zm0 7h11v3H12z" fill="#ffc400"/></symbol>
-<symbol id="arrow" viewBox="0 0 24 24"><path d="M12 4v15m-6-6 6 6 6-6"/></symbol>
-<symbol id="android" viewBox="0 0 24 24"><path d="m7 5-2-3m12 3 2-3M3 13a9 9 0 0 1 18 0H3Zm2 3v4h14v-4M7 20v2m10-2v2"/><path d="M8 9h.01M16 9h.01" stroke-width="3"/></symbol>
-<symbol id="feather" viewBox="0 0 24 24"><path d="M20 3C9-1 2 8 5 15l4 4c8 2 15-7 11-16ZM3 22 16 9m-9 9v-6m4 2h6"/></symbol>
-<symbol id="spark" viewBox="0 0 24 24"><path d="m12 2 2.6 7.4L22 12l-7.4 2.6L12 22l-2.6-7.4L2 12l7.4-2.6Z"/></symbol>
+<body>
+<a class="skip" href="#main">Перейти к содержанию</a>
+<svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+<symbol id="i-logo" viewBox="0 0 32 32"><path fill="currentColor" stroke="none" d="M6 5h20a3 3 0 0 1 3 3v14a3 3 0 0 1-3 3H15l-7 5v-5H6a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3Zm3 8h14v-2H9Zm0 5h10v-2H9Z"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v15m-6-6 6 6 6-6"/></symbol>
+<symbol id="i-next" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8c-1.2 0-2.3-.2-3.3-.7L4 20l1.2-4.3A8 8 0 1 1 20 11.5Z"/><path d="M8 12h8"/></symbol>
+<symbol id="i-call" viewBox="0 0 24 24"><path d="m6 4 3 4-2 2a11 11 0 0 0 7 7l2-2 4 3-1 3c-8 1-17-8-16-16Z"/></symbol>
+<symbol id="i-media" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m4 16 5-5 4 4 2-2 5 5m-5-9h.01"/></symbol>
+<symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.8 6.3.9-4.5 4.5 1 6.3-5.5-3-5.5 3 1-6.3L3 9.7l6.3-.9Z"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.4"/><path d="M10 18h4"/></symbol>
+<symbol id="i-desktop" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M9 21h6m-3-4v4"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0m-7 7v3"/></symbol>
+<symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-3v10l-6-3"/></symbol>
 </defs></svg>
-<header class="header wrap"><a href="#top" class="brand" aria-label="Салом — на главную"><span class="brand-mark"><svg aria-hidden="true"><use href="#logo"/></svg></span>Салом</a><nav class="header-nav" aria-label="Навигация"><a href="#inside">Что внутри</a><a href="#install">Как установить</a><a href="#install" class="nav-download">Скачать<svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></a></nav></header>
-<main>
-<section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy" data-reveal="left"><div class="eyebrow"><span class="status-dot" aria-hidden="true"></span>Android и Windows</div><h1 id="hero-title">Просто скажи<br><em>Салом.</em></h1><p>Находи своих по username. Пиши друзьям. Сохраняй важное — начни с простого приветствия.</p><div class="download-row"><a class="download" id="hero-download" data-android-primary href="/salom/salom-0.16.0.apk" download="SALOM-0.16.0.apk"><span>Скачать для Android<small><span data-android-kind>Универсальный</span> · <span data-size>APK</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a><a class="download windows" id="windows-download" href="/salom/SALOM-0.16.0-Release-Setup.exe" download="SALOM-0.16.0-Release-Setup.exe"><span>Скачать для Windows<small>Установщик · <span data-windows-size>Windows 11</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a></div><div class="download-meta"><span>Версия <span data-version>0.16.0 Stability</span></span><span class="meta-separator">·</span><span>Android 7.0+</span><span class="meta-separator">·</span><span>Windows 11+</span></div><div class="hero-note"><strong>SALOM 0.16.0 Stability.</strong> Полноэкранные звонки на Android, реакции и обновлённый профиль.</div></div>
-<div class="stage" data-reveal="right"><svg class="sunburst" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M50 4v21m0 50v21M4 50h21m50 0h21M17 17l15 15m36 36 15 15M17 83l15-15m36-36 15-15"/><circle cx="50" cy="50" r="12"/></svg><div class="hello" aria-hidden="true">Салом!</div><div class="phone" role="img" aria-label="Иллюстрация Избранного в Салом: жёлтый интерфейс и личные заметки"><div class="camera"></div><div class="phone-status"><span>9:41</span><span>▰</span></div><div class="phone-bar"><span class="phone-back">‹</span><span class="phone-avatar">★</span><div class="phone-name">Избранное<small>Только для тебя</small></div></div><div class="phone-body"><div class="phone-bubble note">Идея на завтра:<br>начать с хорошего 💡</div><div class="phone-bubble">Маленькая заметка.<br>Большие планы.<small>9:41</small></div><div class="phone-bubble">Салом! 💛<small>9:41</small></div></div><div class="phone-compose"><div class="phone-field">☺ &nbsp; Сообщение</div><span class="phone-send">↑</span></div><div class="phone-caption">Салом · Android</div></div><div class="sticker" aria-hidden="true">Жёлтый —<br>это настроение.<span>и немного солнца ☀</span></div><div class="stage-caption">Иллюстрация интерфейса</div></div></section>
-<div class="ribbon wrap" data-reveal aria-label="О приложении"><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#android"/></svg><strong>Настоящее Android-приложение</strong></div><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#feather"/></svg><strong>Версия <b data-version>0.16.0 Stability</b></strong></div><div class="ribbon-item"><svg class="icon" aria-hidden="true"><use href="#spark"/></svg><strong>Свой характер</strong><span>тёплый и жёлтый</span></div></div>
-<section class="inside wrap" data-reveal id="inside" aria-labelledby="inside-title"><div><div class="section-kicker">Уже в Салом</div><h2 id="inside-title">Меньше лишнего.<br>Больше твоего.</h2><p class="inside-intro">Понятные вещи, которыми приятно пользоваться. Без сложного начала.</p></div><div><article class="feature" data-reveal><span class="feature-index">01 /</span><div><h3>Свои находятся.<span class="mini-tag">УЖЕ РАБОТАЕТ</span></h3><p>Достаточно первых букв username. С @ или без — общий каталог поможет найти профиль с другого телефона.</p></div></article><article class="feature" data-reveal><span class="feature-index">02 /</span><div><h3>Важное не теряется.</h3><p>Мысль, список дел или маленькое напоминание. Отправляй всё в Избранное — заметки останутся на твоём устройстве.</p></div></article><article class="feature" data-reveal><span class="feature-index">03 /</span><div><h3>Близкие — под рукой.</h3><p>Открой телефонные контакты и поделись ссылкой на Салом. Доступ к адресной книге — только с твоего разрешения.</p></div></article></div></section>
-<section class="install wrap" data-reveal id="install" aria-labelledby="install-title"><div><div class="section-kicker">Установка</div><h2 id="install-title">Выбери своё<br><em>устройство.</em></h2><div class="download-row"><a class="download" data-android-primary href="/salom/salom-0.16.0.apk" download="SALOM-0.16.0.apk"><span>Скачать для Android<small><span data-android-kind>Универсальный</span> · <span data-size>APK</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a><a class="download windows" href="/salom/SALOM-0.16.0-Release-Setup.exe" download="SALOM-0.16.0-Release-Setup.exe"><span>Скачать для Windows<small>Setup.exe · <span data-windows-size>Windows 11</span></small></span><span class="arrow-disc"><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></span></a></div></div><div><ol class="steps"><li><span class="step-number">1</span><div>Android<small>Скачай APK, открой файл и подтверди установку. Если появится запрос, разреши установку для этого файла.</small></div></li><li><span class="step-number">2</span><div>Windows 11<small>Запусти Setup.exe: он устанавливается в профиль пользователя без прав администратора.</small></div></li><li><span class="step-number">3</span><div>Первый вход<small>Для входа нажми «Продолжить с Google» и выбери аккаунт.</small></div></li></ol><div class="android-choices" aria-labelledby="android-choices-title">
-<h3 id="android-choices-title">Версии APK для Android</h3>
-<p data-device-abi aria-live="polite">Если не знаешь архитектуру телефона, выбери универсальный APK.</p>
-<div class="android-choice-links">
-<a data-abi="arm64-v8a" href="/salom/salom-0.16.0-arm64-v8a.apk" download>ARM64 <small>64 бит</small></a>
-<a data-abi="armeabi-v7a" href="/salom/salom-0.16.0-armeabi-v7a.apk" download>ARM32 <small>32 бита</small></a>
-<a data-abi="universal" href="/salom/salom-0.16.0.apk" download>Универсальный <small>APK</small></a>
-</div>
-</div><p class="update-note"><strong>Важно для обновления Android:</strong> официальную версию 0.15.7 можно обновить через настройки приложения. Подпись APK осталась прежней.</p></div></section>
-<section class="faq wrap" data-reveal aria-labelledby="faq-title"><div><div class="section-kicker">На всякий случай</div><h2 id="faq-title">Коротко<br>о главном.</h2></div><div><details><summary>Это приложение или сайт?</summary><p>Настоящее нативное приложение для Android и Windows. Здесь — только страница скачивания.</p></details><details><summary>Что нового в 0.16.0 Stability?</summary><p>В Android звонки открываются на весь экран. Обновлены настройки, профиль и выбор вложений. Реакции доступны на Android и Windows.</p></details><details><summary>Можно обновить старую Android-версию?</summary><p>Для обновления с официальной 0.15.7 открой «Настройки» в Саломе и нажми кнопку проверки обновлений. Если подпись очень старой сборки отличается, Android не разрешит обновление. Проверь, какие данные сохранены, прежде чем удалять приложение.</p></details><details><summary>Что происходит с контактами?</summary><p>Имена и номера читаются из телефонной книги после твоего разрешения. Общий поиск использует имя и username профиля; контакты устройства не загружаются без разрешения.</p></details></div></section>
+<div class="progress" aria-hidden="true"></div>
+<header class="nav shell">
+  <a class="brand" href="/" aria-label="Салом, главная"><span><svg><use href="#i-logo"/></svg></span> Салом</a>
+  <nav aria-label="Навигация"><a href="#features">Возможности</a><a href="#changes">Что нового</a><a href="#help">Помощь</a></nav>
+  <a class="nav-download" href="#install">Скачать <svg><use href="#i-down"/></svg></a>
+</header>
+<main id="main">
+  <section class="hero shell" aria-labelledby="hero-title">
+    <div class="hero-copy">
+      <a class="version" href="#changes"><i></i><span data-version>0.16.0 Stability</span><svg><use href="#i-next"/></svg></a>
+      <h1 id="hero-title">Просто скажи<br><em>Салом.</em></h1>
+      <p>Переписывайся, звони и делись фото с близкими. Салом доступен на Android и Windows.</p>
+      <div class="hero-actions">
+        <a class="button yellow" data-android-main href="/salom/salom-0.16.0.apk" download><svg><use href="#i-phone"/></svg><span>Скачать для Android<small data-android-summary>Универсальный APK · 55,14 МБ</small></span><svg class="end"><use href="#i-down"/></svg></a>
+        <a class="button ghost" data-windows href="/salom/SALOM-0.16.0-Release-Setup.exe" download><svg><use href="#i-desktop"/></svg><span>Скачать для Windows<small data-windows-summary>Setup.exe · 148,13 МБ</small></span><svg class="end"><use href="#i-down"/></svg></a>
+      </div>
+      <a class="sub-link" href="#install">Варианты APK и инструкция по установке <span aria-hidden="true">↓</span></a>
+    </div>
+    <figure class="demo" aria-label="Интерактивное демо Салома">
+      <div class="stage">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><span class="spark" aria-hidden="true">✦</span><span class="spark small" aria-hidden="true">✧</span>
+        <div class="device">
+          <div class="device-top" aria-hidden="true"><span>09:41</span><span class="lens"></span><span>◔ ▰</span></div>
+          <div class="screens">
+            <div class="screen chat active" id="demo-chat">
+              <div class="chat-top"><div class="avatar">М</div><div><b>Мадина</b><small>в сети</small></div><svg><use href="#i-call"/></svg></div>
+              <div class="bubbles">
+                <p class="bubble in">Салом! Увидимся вечером?<small>18:24</small></p>
+                <p class="bubble out">Конечно 💛<small>18:24 ✓✓</small></p>
+                <div class="bubble in voice"><span class="play">▶</span><span><i class="wave">▂▅▃▆▇▄▆▃▅▂</i><small>0:08</small></span></div>
+                <div class="reaction">👍 <b>1</b></div>
+              </div>
+              <div class="compose"><span>Сообщение</span><i><svg><use href="#i-mic"/></svg></i></div>
+            </div>
+            <div class="screen call" id="demo-call" hidden>
+              <div class="call-title"><small>Аудиозвонок</small><b>Мадина</b><span>00:24</span></div>
+              <div class="call-avatar"><span>М</span></div>
+              <div class="call-controls"><i><svg><use href="#i-mic"/></svg></i><i><svg><use href="#i-video"/></svg></i><i class="hangup"><svg><use href="#i-call"/></svg></i></div>
+            </div>
+            <div class="screen media" id="demo-media" hidden>
+              <div class="chat-top"><div class="avatar">М</div><div><b>Мадина</b><small>в сети</small></div><svg><use href="#i-media"/></svg></div>
+              <div class="gallery"><b>Вложения</b><div class="tiles" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div><div class="gallery-tabs">Фото　·　Видео　·　Файл</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption><div class="demo-switch" aria-label="Примеры интерфейса" hidden>
+        <button type="button" aria-pressed="true" aria-controls="demo-chat" data-preview="demo-chat">Чат</button>
+        <button type="button" aria-pressed="false" aria-controls="demo-call" data-preview="demo-call">Звонок</button>
+        <button type="button" aria-pressed="false" aria-controls="demo-media" data-preview="demo-media">Вложения</button>
+      </div><small>Иллюстрация интерфейса</small></figcaption>
+    </figure>
+  </section>
+  <section id="features" class="shell section" aria-labelledby="features-title">
+    <div class="section-heading reveal"><h2 id="features-title">Что умеет Салом</h2><p>Найди собеседника по имени или @username и начни чат.</p></div>
+    <div class="feature-grid">
+      <article class="feature reveal"><svg><use href="#i-chat"/></svg><h3>Сообщения и реакции</h3><p>Отвечай на конкретные сообщения, редактируй свои и ставь реакции. Непрочитанные видны в списке чатов.</p></article>
+      <article class="feature reveal"><svg><use href="#i-call"/></svg><h3>Аудио и видео</h3><p>Звони из личного чата. На Android звонок открывается на весь экран, а свернуть его можно прямо в переписку.</p></article>
+      <article class="feature reveal"><svg><use href="#i-media"/></svg><h3>Медиа в переписке</h3><p>Отправляй фото, видео, документы и голосовые. Фотографии открываются из чата, голосовые проигрываются прямо в переписке.</p></article>
+      <article class="feature reveal"><svg><use href="#i-star"/></svg><h3>Свой профиль</h3><p>Смени аватар, выбери оформление и проверь способ входа в настройках аккаунта.</p></article>
+    </div>
+  </section>
+  <section id="install" class="shell section install" aria-labelledby="install-title">
+    <div class="section-heading reveal"><h2 id="install-title">Скачать и установить</h2><p>Android 7.0 и новее · Windows 11 x64</p></div>
+    <div class="install-grid">
+      <article class="install-card reveal">
+        <div class="platform-title"><svg><use href="#i-phone"/></svg><h3>Android</h3></div>
+        <p data-device-hint aria-live="polite">Если архитектура телефона неизвестна, подойдёт универсальный APK.</p>
+        <div class="apk-grid">
+          <a data-abi="arm64-v8a" href="/salom/salom-0.16.0-arm64-v8a.apk" download><b>ARM64</b><small>19,28 МБ</small><svg><use href="#i-down"/></svg></a>
+          <a data-abi="armeabi-v7a" href="/salom/salom-0.16.0-armeabi-v7a.apk" download><b>ARM32</b><small>13,81 МБ</small><svg><use href="#i-down"/></svg></a>
+          <a data-abi="universal" href="/salom/salom-0.16.0.apk" download><b>Универсальный</b><small>55,14 МБ</small><svg><use href="#i-down"/></svg></a>
+        </div>
+        <ol><li>Скачай и открой APK.</li><li>Если Android спросит, разреши установку для браузера или файлового менеджера. Если Play Защита предложит проверить APK, дождись результата.</li><li>Уже пользуешься Саломом? Открой «Настройки → Обновить приложение».</li></ol>
+      </article>
+      <article class="install-card reveal">
+        <div class="platform-title"><svg><use href="#i-desktop"/></svg><h3>Windows</h3></div>
+        <p>Установщик для Windows 11 x64. Обычно права администратора не нужны.</p>
+        <a class="button dark" data-windows href="/salom/SALOM-0.16.0-Release-Setup.exe" download><svg><use href="#i-desktop"/></svg><span>Скачать Setup.exe<small data-windows-summary>Setup.exe · 148,13 МБ</small></span><svg class="end"><use href="#i-down"/></svg></a>
+        <ol><li>Запусти Setup.exe и нажми «Установить».</li><li>Открой Салом через ярлык на рабочем столе или в меню «Пуск».</li><li>Чтобы обновить Салом, закрой его и запусти новый установщик.</li></ol>
+      </article>
+    </div>
+  </section>
+  <section id="changes" class="shell section changes" aria-labelledby="changes-title">
+    <div class="section-heading reveal"><h2 id="changes-title">Что нового</h2><p>Текущий выпуск</p></div>
+    <article class="release reveal"><div><time datetime="2026-11-23">23 ноября 2026</time><h3 data-version>0.16.0 Stability</h3><a href="https://github.com/mukimovmuhammad/chatter/releases">Все релизы на GitHub <span aria-hidden="true">↗</span></a></div>
+      <ul data-release-notes><li>На Android — полноэкранный звонок, обновлённый профиль и выбор вложений.</li><li>Реакции на сообщения в Android и Windows.</li><li>Компактные APK для ARM32 и ARM64.</li><li>Двусторонний звук и видео Android ↔ Windows в этой сборке ещё проверяются.</li></ul>
+    </article>
+  </section>
+  <section id="help" class="shell section help" aria-labelledby="help-title">
+    <div class="section-heading reveal"><h2 id="help-title">Помощь</h2><p>Установка, вход и обновления.</p></div>
+    <div class="help-grid">
+      <div class="questions reveal">
+        <details><summary>Как войти в Салом?</summary><p>На Android и Windows можно войти через Google или получить шестизначный код на email. Если входишь впервые, приложение предложит выбрать имя пользователя.</p></details>
+        <details><summary>Выбрал Google-аккаунт, но остался на экране входа</summary><p>Проверь, что у тебя актуальная версия Салома. Повтори вход или выбери код на email и укажи адрес, который уже привязан к аккаунту. Если ошибка повторится, пришли в поддержку версию приложения, модель устройства и текст ошибки.</p></details>
+        <details><summary>Код на email не пришёл</summary><p>Проверь написание адреса и папку «Спам». Код действует пять минут. Новый можно запросить через минуту.</p></details>
+        <details><summary>Какой APK выбрать?</summary><p>ARM64 — для 64-битной системы ARM, ARM32 — для 32-битной. Если Android отклоняет выбранный пакет или архитектура неизвестна, скачай универсальный APK.</p></details>
+        <details><summary>Почему Windows показывает предупреждение?</summary><p>У текущего Setup.exe нет подписи Windows. Скачивай его с этого сайта или из релиза GitHub. Размеры и контрольные суммы есть в <a href="/salom/version.json">манифесте версии</a>.</p></details>
+        <details><summary>Что делать, если не работает звонок?</summary><p>Разреши доступ к микрофону и камере для видео. На Windows для звонков нужен Microsoft Edge WebView2 Runtime. Если проблема повторяется, сообщи, на каких двух устройствах и версиях Салома ты её заметил.</p></details>
+      </div>
+      <aside class="support reveal"><svg><use href="#i-chat"/></svg><h3>Связаться с разработчиком</h3><p>Найди <b>@mukimovmuhammad</b> в поиске Салома или напиши на почту.</p><button type="button" data-copy="@mukimovmuhammad" hidden>Скопировать @username</button><a href="mailto:mukimovstudio@gmail.com">mukimovstudio@gmail.com</a><span class="copy-result" aria-live="polite"></span></aside>
+    </div>
+  </section>
 </main>
-<footer class="footer wrap" data-reveal><a href="#top" class="brand"><span class="brand-mark"><svg aria-hidden="true"><use href="#logo"/></svg></span>Салом</a><div class="footer-links"><a href="#install">Установка</a><a href="/salom/version.json">История версий</a><a href="/privacy">Конфиденциальность</a><a href="/terms">Условия</a><a href="mailto:mukimovstudio@gmail.com">Написать разработчику</a><a href="#top">Наверх ↑</a></div><div class="legal-note">© 2026 Салом. Приложение развивается — спасибо, что ты рядом.</div></footer>
-<aside class="mobile-download" aria-label="Скачать приложение"><div><strong>Салом для Android</strong><small><span data-version>0.16.0 Stability</span> · <span data-android-kind>Универсальный</span></small></div><a data-android-primary href="/salom/salom-0.16.0.apk" download="SALOM-0.16.0.apk">Скачать<svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></a></aside>
-<script>
-(() => {
-  const hero = document.getElementById('hero-download');
-  const bar = document.querySelector('.mobile-download');
-  if ('IntersectionObserver' in window) new IntersectionObserver(entries => bar.classList.toggle('show', !entries[0].isIntersecting), { threshold: 0 }).observe(hero);
-  const abiLabels = { 'arm64-v8a': 'ARM64', 'armeabi-v7a': 'ARM32', universal: 'Универсальный' };
-  const sizeLabel = bytes => new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    .format(bytes / 1000000) + ' МБ';
-  const detectAndroidAbi = async () => {
-    const ua = navigator.userAgentData;
-    if (ua?.platform !== 'Android' || typeof ua.getHighEntropyValues !== 'function') return;
-    try {
-      const { architecture, bitness } = await ua.getHighEntropyValues(['architecture', 'bitness']);
-      if (architecture !== 'arm') return;
-      if (bitness === '64') return 'arm64-v8a';
-      if (bitness === '32') return 'armeabi-v7a';
-    } catch { /* Use the universal APK when the browser withholds device details. */ }
-  };
-  const deviceAbi = detectAndroidAbi();
-  fetch('/salom/version.json', { cache: 'no-store' }).then(response => {
-    if (!response.ok) throw new Error('metadata unavailable');
-    return response.json();
-  }).then(info => {
-    if (typeof info.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(info.version)) return;
-    const suffix = typeof info.displayName === 'string' && info.displayName ? ' ' + info.displayName : '';
-    document.querySelectorAll('[data-version]').forEach(node => { node.textContent = info.version + suffix; });
-
-    const variants = new Map([['universal', info.size]]);
-    for (const variant of Array.isArray(info.androidVariants) ? info.androidVariants : []) {
-      if (variant.abi === 'arm64-v8a' || variant.abi === 'armeabi-v7a') variants.set(variant.abi, variant.size);
-    }
-    const linkDownload = (element, abi) => {
-      const filename = 'salom-' + info.version + (abi === 'universal' ? '' : '-' + abi) + '.apk';
-      element.href = '/salom/' + filename;
-      element.download = filename;
-    };
-    const hasSize = abi => Number.isFinite(variants.get(abi)) && variants.get(abi) > 0;
-    const selectPrimary = abi => {
-      document.querySelectorAll('[data-android-primary]').forEach(node => linkDownload(node, abi));
-      document.querySelectorAll('[data-android-kind]').forEach(node => { node.textContent = abiLabels[abi]; });
-      if (hasSize(abi)) document.querySelectorAll('[data-size]').forEach(node => { node.textContent = sizeLabel(variants.get(abi)); });
-    };
-    document.querySelectorAll('[data-abi]').forEach(node => {
-      const abi = node.dataset.abi;
-      node.hidden = !hasSize(abi);
-      if (node.hidden) return;
-      linkDownload(node, abi);
-      node.querySelector('small').textContent = sizeLabel(variants.get(abi));
-    });
-    selectPrimary('universal');
-    deviceAbi.then(abi => {
-      if (!hasSize(abi)) return;
-      selectPrimary(abi);
-      document.querySelector('[data-abi="' + abi + '"]').setAttribute('data-recommended', '');
-      document.querySelector('[data-device-abi]').textContent = 'Для этого устройства рекомендуем ' + abiLabels[abi] + '.';
-    });
-
-    if (typeof info.windowsFile === 'string' && /^SALOM-[0-9.]+-(?:AllowCookie|CallFix|Release)-Setup\.exe$/.test(info.windowsFile)) {
-      document.querySelectorAll('a[download$=".exe"]').forEach(node => { node.href = '/salom/' + info.windowsFile; node.download = info.windowsFile; });
-    }
-    if (Number.isFinite(info.windowsSize) && info.windowsSize > 0) {
-      document.querySelectorAll('[data-windows-size]').forEach(node => { node.textContent = sizeLabel(info.windowsSize); });
-    }
-  }).catch(() => {});
-})();
-</script>
-<script>
-(() => {
-  const bar = document.querySelector('.scroll-progress span');
-  const header = document.querySelector('.header');
-  let pending = false;
-  const updateScroll = () => {
-    if (pending) return;
-    pending = true;
-    requestAnimationFrame(() => {
-      const root = document.documentElement;
-      const range = root.scrollHeight - window.innerHeight;
-      const progress = range > 0 ? Math.min(1, Math.max(0, window.scrollY / range)) : 0;
-      bar.style.transform = `scaleX(${progress})`;
-      header.classList.toggle('is-scrolled', window.scrollY > 6);
-      pending = false;
-    });
-  };
-  window.addEventListener('scroll', updateScroll, { passive: true });
-  window.addEventListener('resize', updateScroll, { passive: true });
-  updateScroll();
-
-  const targets = document.querySelectorAll('[data-reveal]');
-  if ('IntersectionObserver' in window && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const observer = new IntersectionObserver(entries => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('is-visible');
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.12, rootMargin: '0px 0px -36px 0px' });
-    targets.forEach(target => observer.observe(target));
-  } else targets.forEach(target => target.classList.add('is-visible'));
-})();
-</script>
-</body></html>
+<footer class="shell footer">
+  <a class="brand" href="/" aria-label="Салом, главная"><span><svg><use href="#i-logo"/></svg></span> Салом</a>
+  <div><a href="/privacy/">Конфиденциальность</a><a href="/terms/">Условия использования</a><a href="#help">Поддержка</a></div>
+  <small>© 2026 Mukimov Studio</small>
+</footer>
+</body>
+</html>
