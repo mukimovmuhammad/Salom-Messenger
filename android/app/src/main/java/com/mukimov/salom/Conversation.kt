@@ -64,6 +64,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -83,7 +85,7 @@ private data class CallPresentation(val callId: String, val peerId: String, val 
 internal fun Conversation(person: Person, store: Store, directory: DirectoryClient, wallpaperId: String, incomingCall: IncomingCallIntent?, onCallIntentHandled: () -> Unit, onWallpaperChange: (String) -> Unit, onBack: () -> Unit) {
     val saved = person.id == "saved"
     val context = LocalContext.current
-    val localCache = remember(context) { LocalChatCache(context) }
+    val localCache = remember(context, directory.ownId) { LocalChatCache(context, directory.ownId) }
     val media = remember(directory) { MediaFiles(context, directory) }
     val audio = remember(media) { ChatAudioPlayer(context, media) }
     val recorder = remember(media) { VoiceRecorder(context, media) }
@@ -122,12 +124,13 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     var editingMessage by remember(person.id) { mutableStateOf<Message?>(null) }
     var sendingId by remember(person.id) { mutableStateOf<String?>(null) }
     var failedIds by remember(person.id) { mutableStateOf(emptySet<String>()) }
+    var blockedIds by remember(person.id) { mutableStateOf(emptySet<String>()) }
     var queuedOutgoing by remember(person.id) { mutableStateOf<List<CachedOutgoing>>(emptyList()) }
     var showWallpapers by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(!saved) }
-    var retry by remember { mutableIntStateOf(0) }
-    var clearedThrough by remember { mutableLongStateOf(0) }
+    val syncRequests = remember(person.id) { Channel<Unit>(Channel.CONFLATED) }
+    var clearedThrough by remember(person.id) { mutableLongStateOf(0) }
     var eventCursor by remember(person.id) { mutableLongStateOf(0L) }
     var messageCursor by remember(person.id) { mutableLongStateOf(0L) }
     val latestMessages by rememberUpdatedState(messages)
@@ -401,6 +404,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             android.util.Log.d("SalomMessage", "id=${item.clientId} stage=http_ack elapsed_ms=${android.os.SystemClock.elapsedRealtime() - started}")
             localCache.confirmOutgoing(person.id, sent, item.clientId)
             failedIds = failedIds - item.clientId
+            blockedIds = blockedIds - item.clientId
             queuedOutgoing = queuedOutgoing.filterNot { it.clientId == item.clientId }
             messages = (messages + sent).filter { it.remoteId > clearedThrough }.distinctBy { it.remoteId }.sortedBy { it.remoteId }
             attachment?.let { media.removeLocal(it) }
@@ -419,6 +423,11 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         } catch (failure: Exception) {
             if (queuedOutgoing.none { it.clientId == item.clientId }) return true
             failedIds = failedIds + item.clientId
+            if ((failure as? DirectoryException)?.status in setOf(400, 403, 404, 409, 413, 422)) {
+                blockedIds = blockedIds + item.clientId
+                sendError = failure.message
+                return true
+            }
             sendError = (failure as? DirectoryException)?.message ?: "Сообщение сохранено и отправится, когда связь восстановится"
             return false
         } finally {
@@ -605,8 +614,8 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         if (!saved && cacheReady) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             var backoff = 1_000L
             while (isActive) {
-                val queued = latestOutgoing.firstOrNull()
-                if (queued != null && queued.clientId != pausedUploadId && !latestSending) {
+                val queued = latestOutgoing.firstOrNull { it.clientId !in blockedIds && it.clientId != pausedUploadId }
+                if (queued != null && !latestSending) {
                     if (attemptQueued(queued)) backoff = 1_000L else backoff = (backoff * 2).coerceAtMost(30_000L)
                 }
                 delay(backoff)
@@ -614,16 +623,16 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         }
     }
 
-    LaunchedEffect(person.id, retry, cacheReady) {
+    LaunchedEffect(person.id, cacheReady) {
         if (!saved && cacheReady) {
-            var cursor = maxOf(messageCursor, clearedThrough)
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (isActive) {
+                    var synchronized = false
                     try {
                         do {
                             val receiptCursor = latestMessages.filter { it.mine && it.remoteId > 0 }.minOfOrNull { it.remoteId } ?: 0L
-                            val batch = directory.messages(person.id, cursor, receiptCursor, eventCursor)
-                            clearedThrough = maxOf(clearedThrough, batch.clearedThrough)
+                            val batch = directory.messages(person.id, maxOf(messageCursor, clearedThrough), receiptCursor, eventCursor)
+                            val nextCleared = maxOf(clearedThrough, batch.clearedThrough)
                             val refreshed = latestMessages.map { message -> if (message.mine) batch.receipts[message.remoteId]?.let { message.copy(receipt = it) } ?: message else message }
                             val merged = (refreshed.associateBy { it.remoteId } + batch.messages.associateBy { it.remoteId }).toMutableMap()
                             val changed = batch.messages.toMutableList()
@@ -638,13 +647,16 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                                 batch.receipts[old.remoteId]?.takeIf { it != old.receipt }?.let { old.copy(receipt = it) }
                             }
                             changed += receiptUpdates
-                            eventCursor = maxOf(eventCursor, batch.events.lastOrNull()?.id ?: eventCursor)
-                            cursor = maxOf(cursor, clearedThrough, batch.messages.lastOrNull()?.remoteId ?: 0)
-                            messageCursor = maxOf(messageCursor, cursor)
+                            val nextEvent = maxOf(eventCursor, batch.events.lastOrNull()?.id ?: eventCursor)
+                            val nextMessage = maxOf(messageCursor, nextCleared, batch.messages.lastOrNull()?.remoteId ?: 0)
                             val acknowledged = batch.messages.filter { it.mine }.mapNotNull { it.clientId }.distinct()
-                            val removed = localCache.applySync(person.id, changed.filter { it.remoteId !in deletedIds }, deletedIds, messageCursor, eventCursor, clearedThrough, acknowledged)
+                            val removed = localCache.applySync(person.id, changed.filter { it.remoteId !in deletedIds }, deletedIds, nextMessage, nextEvent, nextCleared, acknowledged)
+                            messageCursor = nextMessage
+                            eventCursor = nextEvent
+                            clearedThrough = maxOf(clearedThrough, nextCleared)
                             queuedOutgoing = queuedOutgoing.filterNot { it.clientId in acknowledged }
                             failedIds = failedIds - acknowledged.toSet()
+                            blockedIds = blockedIds - acknowledged.toSet()
                             // Recheck the live list after Room yields so an HTTP acknowledgement cannot be lost.
                             val live = messages.filter { it.remoteId !in deletedIds && it.remoteId > clearedThrough }
                             messages = (live.associateBy { it.remoteId } + merged)
@@ -652,10 +664,16 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                             removed.forEach { outgoing -> outgoing.attachment()?.let { runCatching { media.removeLocal(it) } } }
                         } while (batch.hasMore)
                         connectionError = null
+                        synchronized = true
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: DirectoryException) { connectionError = failure.message }
+                    catch (failure: Exception) {
+                        android.util.Log.w("SalomMessage", "Chat sync failed", failure)
+                        connectionError = "Не удалось обновить историю. Повторяем…"
+                    }
                     finally { loading = false }
-                        if (realtimeConnected) awaitCancellation() else delay(1500)
+                    if (synchronized && realtimeConnected) syncRequests.receive()
+                    else withTimeoutOrNull(1_500L) { syncRequests.receive() }
                 }
             }
         }
@@ -669,7 +687,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         if (event.connected) {
                             realtimeConnected = true
                             backoff = 1_000L
-                            retry++ // Fetch anything missed before the socket became ready.
+                            syncRequests.trySend(Unit) // Fetch anything missed before the socket became ready.
                         } else when (event.type) {
                             "message" -> {
                                 val incoming = event.message
@@ -678,11 +696,11 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                                     messages = (messages + incoming).sortedBy { it.remoteId }
                                     android.util.Log.d("SalomMessage", "id=${incoming.clientId} stage=websocket_visible")
                                 }
-                                retry++
+                                syncRequests.trySend(Unit)
                             }
-                            "sync" -> retry++
+                            "sync" -> syncRequests.trySend(Unit)
                             "typing" -> peerTyping = event.typing ?: false
-                            "presence" -> { peerOnline = event.online ?: false; retry++ }
+                            "presence" -> peerOnline = event.online ?: false
                             "call_invite" -> if (event.callId != null && event.peerId == person.id && activeCall == null) {
                                 if (CallSessionManager.incoming(event.callId) || CallSessionManager.current(event.callId) == CallSessionManager.State.RINGING)
                                     activeCall = CallPresentation(event.callId, person.id, event.callerName ?: person.name, true, "incoming", event.video)
@@ -708,13 +726,13 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                                 }
                                 else engine.receive(event.signalKind, event.signalPayload)
                             }
-                            "closed", "disconnected" -> { realtimeConnected = false; retry++ }
+                            "closed", "disconnected" -> { realtimeConnected = false; syncRequests.trySend(Unit) }
                         }
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { }
                 realtimeConnected = false
-                retry++
+                syncRequests.trySend(Unit)
                 delay(backoff)
                 backoff = (backoff * 2).coerceAtMost(30_000L)
             }
@@ -869,7 +887,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         scope.launch { attemptQueued(queued) }
                     }
                     else if (queued == null && (draft.isNotBlank() || selected != null)) send()
-                    else { sendError = null; retry++ }
+                    else { sendError = null; syncRequests.trySend(Unit) }
                 }
             }) { Text(if (micDenied) "Настройки" else "Повторить", fontSize = 11.sp) }
         }
@@ -902,6 +920,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         ChatMessage(queued.toMessage(status), bubbleWidth, media, audio, false, peerName = person.name)
                         if (status == "failed") TextButton(enabled = !sending, onClick = {
                             if (pausedUploadId == queued.clientId) pausedUploadId = null
+                            blockedIds = blockedIds - queued.clientId
                             scope.launch { attemptQueued(queued) }
                         }) { Text("Повторить отправку") }
                     }
@@ -1033,7 +1052,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         val old = messages.filter { it.remoteId <= clearedThrough }
                         messages = messages.filter { it.remoteId > clearedThrough }
                         old.forEach { it.attachment?.let { attachment -> media.removeLocal(attachment) } }
-                        retry++
+                        syncRequests.trySend(Unit)
                     }
                     confirmClear = false
                 } catch (cancelled: CancellationException) { throw cancelled }
@@ -1095,7 +1114,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                                 scope.launch {
                                     try {
                                         directory.setReaction(target.remoteId, emoji.takeUnless { it == currentReaction })
-                                        retry++
+                                        syncRequests.trySend(Unit)
                                     } catch (cancelled: CancellationException) { throw cancelled }
                                     catch (failure: DirectoryException) {
                                         sendError = if (failure.status == 404 && failure.message == "Not Found")

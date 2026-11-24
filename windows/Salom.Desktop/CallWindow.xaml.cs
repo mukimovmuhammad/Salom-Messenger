@@ -48,12 +48,30 @@ public partial class CallWindow : Window
     {
         if (_ended || !payload.TryGetProperty("call_id", out var id) || id.GetString() != _callId) return;
         var type = payload.TryGetProperty("type", out var t) ? t.GetString() : "";
+        if (type == "call_state" && payload.TryGetProperty("state", out var state) &&
+            state.GetString() is "declined" or "cancelled" or "ended" or "missed")
+        {
+            _ended = true;
+            _connectionTimer.Stop();
+            _leaseTimer.Stop();
+            CallStatus.Text = state.GetString() switch
+            {
+                "declined" => "Звонок отклонён", "missed" => "Нет ответа", _ => "Звонок завершён"
+            };
+            await Task.Delay(1200);
+            if (IsLoaded) Close();
+            return;
+        }
         if (!_webReady)
         {
             if (_pendingEvents.Count < 128) _pendingEvents.Add(payload.Clone());
             return;
         }
-        await ProcessEventAsync(payload, type);
+        try { await ProcessEventAsync(payload, type); }
+        catch (Exception error)
+        {
+            if (!_ended) System.Diagnostics.Trace.TraceWarning("SALOM call event: {0}", error.GetType().Name);
+        }
     }
 
     private async Task ProcessEventAsync(JsonElement payload, string? type)
@@ -69,13 +87,6 @@ public partial class CallWindow : Window
             _connectionTimer.Start();
             await CallBrowser.ExecuteScriptAsync("window.salomCreateOffer()");
         }
-        else if (type == "call_state" && payload.TryGetProperty("state", out var state) && state.GetString() is "declined" or "cancelled" or "ended" or "missed")
-        {
-            await Dispatcher.InvokeAsync(() => { CallStatus.Text = state.GetString() switch { "declined" => "Звонок отклонён", "missed" => "Нет ответа", _ => "Звонок завершён" }; });
-            await Task.Delay(1600);
-            _ended = true;
-            await Dispatcher.InvokeAsync(Close);
-        }
     }
 
     private async void InitializeCallAsync(object sender, RoutedEventArgs e)
@@ -85,6 +96,7 @@ public partial class CallWindow : Window
             var folder = Path.Combine(AppContext.BaseDirectory, "CallWeb");
             if (!Directory.Exists(folder)) throw new DirectoryNotFoundException("Не найдены файлы звонка.");
             await CallBrowser.EnsureCoreWebView2Async();
+            if (_ended) return;
             CallBrowser.CoreWebView2.SetVirtualHostNameToFolderMapping("salom-call.local", folder, CoreWebView2HostResourceAccessKind.DenyCors);
             CallBrowser.CoreWebView2.PermissionRequested += (_, args) =>
             {
@@ -100,18 +112,24 @@ public partial class CallWindow : Window
             CallBrowser.Source = new Uri("https://salom-call.local/call.html");
             if (!await navigation.Task.WaitAsync(TimeSpan.FromSeconds(15))) throw new InvalidOperationException("Не удалось открыть интерфейс звонка.");
             using var config = await _client.CallConfigAsync();
+            if (_ended) return;
             var ice = config.RootElement.GetProperty("ice_servers").GetRawText();
             var script = $"window.salomStart({JsonSerializer.Serialize(ice)},{(_isCaller ? "true" : "false")},{(_video ? "true" : "false")})";
             await CallBrowser.ExecuteScriptAsync(script);
             await _mediaReady.Task.WaitAsync(TimeSpan.FromSeconds(25));
-            _webReady = true;
-            foreach (var pending in _pendingEvents.ToArray())
+            while (!_ended && _pendingEvents.Count > 0)
+            {
+                var pending = _pendingEvents[0];
+                _pendingEvents.RemoveAt(0);
                 await ProcessEventAsync(pending, pending.TryGetProperty("type", out var eventType) ? eventType.GetString() : null);
-            _pendingEvents.Clear();
-            CallStatus.Text = _isCaller ? "Звоним…" : "Соединяемся…";
+            }
+            if (_ended) return;
+            _webReady = true;
+            CallStatus.Text = _isCaller && !_callAccepted ? "Звоним…" : "Соединяемся…";
             if (!_isCaller)
             {
                 using var accepted = await _client.UpdateCallAsync(_callId, "accept_leased");
+                if (_ended) return;
                 _callAccepted = accepted.RootElement.GetProperty("state").GetString() == "accepted";
                 if (!_callAccepted) Close();
                 else if (!_mediaConnected) _connectionTimer.Start();
@@ -128,6 +146,7 @@ public partial class CallWindow : Window
 
     private async void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
+        if (_ended) return;
         try
         {
             using var message = JsonDocument.Parse(e.WebMessageAsJson);

@@ -79,6 +79,8 @@
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
+                        <Button DockPanel.Dock="Right" Content="Обновить" Height="36" Padding="10,0" Margin="0,0,8,0"
+                                Click="Update_Click" ToolTip="Проверить обновления Салома"/>
                         <TextBlock Text="Салом" FontSize="25" FontWeight="Bold" VerticalAlignment="Center"/>
                     </DockPanel>
                     <Border Background="#202A35" CornerRadius="14" Margin="0,0,0,10"><TextBox x:Name="SearchBox" Background="Transparent" Text="Поиск по @username" Foreground="#9BA8B7" GotFocus="Search_GotFocus" LostFocus="Search_LostFocus" KeyDown="Search_KeyDown"/></Border>

@@ -40,9 +40,17 @@ class RealtimeEndpointTests(unittest.TestCase):
                     event = socket.receive_json()
                     self.assertEqual(event["type"], "message")
                     self.assertEqual((event["message"]["client_id"], event["message"]["id"]), (logical_id, committed["id"]))
-                    retry = client.post("/messages", headers=sender, json=body)
+                    throttle = app.throttle
+                    def throttle_with_full_send_quota(key, limit=180):
+                        if key == 'send-message:' + alice:
+                            raise app.HTTPException(429, 'Quota reached')
+                        throttle(key, limit)
+                    with patch('app.throttle', side_effect=throttle_with_full_send_quota):
+                        retry = client.post("/messages", headers=sender, json=body)
+                        new_message = client.post("/messages", headers=sender, json=dict(body, client_id=str(uuid.uuid4())))
                     self.assertEqual(retry.status_code, 200)
                     self.assertEqual(retry.json()["id"], committed["id"])
+                    self.assertEqual(new_message.status_code, 429)
                     # A later marker proves the retry did not enqueue a second message event.
                     marker = dict(body, client_id=str(uuid.uuid4()))
                     self.assertEqual(client.post("/messages", headers=sender, json=marker).status_code, 200)

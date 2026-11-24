@@ -197,14 +197,15 @@ internal abstract class LocalChatDatabase : RoomDatabase() {
     abstract fun chatDao(): LocalChatDao
 
     companion object {
-        @Volatile private var instance: LocalChatDatabase? = null
+        private val accounts = mutableMapOf<String, LocalChatDatabase>()
 
-        fun get(context: Context): LocalChatDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(
+        fun get(context: Context, accountId: String): LocalChatDatabase = synchronized(this) {
+            val owner = java.util.UUID.fromString(accountId).toString()
+            accounts.getOrPut(owner) { Room.databaseBuilder(
                 context.applicationContext,
                 LocalChatDatabase::class.java,
-                "salom-local-chat.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+                "salom-local-chat-$owner.db"
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build() }
         }
 
         internal val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
@@ -223,8 +224,8 @@ internal abstract class LocalChatDatabase : RoomDatabase() {
     }
 }
 
-internal class LocalChatCache(context: Context) {
-    private val dao = LocalChatDatabase.get(context).chatDao()
+internal class LocalChatCache(context: Context, accountId: String) {
+    private val dao = LocalChatDatabase.get(context, accountId).chatDao()
 
     suspend fun messages(peerId: String): List<Message> = withContext(Dispatchers.IO) {
         dao.messages(peerId).map(CachedMessage::toMessage)

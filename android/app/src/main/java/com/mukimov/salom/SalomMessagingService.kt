@@ -106,6 +106,9 @@ class PushRegistrationWorker(context: Context, parameters: WorkerParameters) : C
 }
 
 class SalomMessagingService : FirebaseMessagingService() {
+    private companion object {
+        val recentMessages = linkedSetOf<String>()
+    }
     override fun onNewToken(token: String) { PushNotifications.sync(this) }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -120,11 +123,16 @@ class SalomMessagingService : FirebaseMessagingService() {
         val peerId = message.data["peer_id"] ?: return
         val messageId = message.data["message_id"] ?: return
         val manager = NotificationManagerCompat.from(this)
-        val appVisible = local.getBoolean("app_visible", false)
+        val appVisible = MainActivity.visible
         val activePeer = local.getString("active_peer_id", null)
         if (appVisible && activePeer == peerId) {
             manager.cancel("salom-peer-$peerId", 0)
             return
+        }
+        val key = local.getString("owner_profile_id", "").orEmpty() + ":" + messageId
+        synchronized(recentMessages) {
+            if (!recentMessages.add(key)) return
+            if (recentMessages.size > 512) recentMessages.remove(recentMessages.first())
         }
         PushNotifications.createChannel(this)
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -144,7 +152,7 @@ class SalomMessagingService : FirebaseMessagingService() {
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         if (Build.VERSION.SDK_INT < 26) notification.setSound(if (silent) null else PushNotifications.soundUri(this)).setPriority(if (silent) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_HIGH)
         try { manager.notify("salom-peer-$peerId", 0, notification.build()) }
-        catch (_: SecurityException) { /* Permission can be revoked between checking and posting. */ }
+        catch (_: SecurityException) { synchronized(recentMessages) { recentMessages.remove(key) } }
     }
 
     private fun showIncomingCall(data: Map<String, String>) {

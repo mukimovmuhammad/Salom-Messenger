@@ -73,8 +73,12 @@ internal sealed class DesktopClient
     internal async Task ValidateSessionAsync()
     {
         if (!HasSession) return;
-        try { _ = await GetAsync("auth/me"); }
-        catch { SignOut(); throw; }
+        try { using var profile = await GetAsync("auth/me"); }
+        catch (HttpRequestException error) when (error.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            SignOut();
+            throw;
+        }
     }
 
     internal void SignOut() { _session = null; _profileId = null; SessionVault.Delete(); }
@@ -286,11 +290,15 @@ internal sealed class DesktopClient
             Port = _apiBase.IsDefaultPort ? -1 : _apiBase.Port
         };
         var socket = new ClientWebSocket();
-        socket.Options.SetRequestHeader("Authorization", "Bearer " + _session);
-        await socket.ConnectAsync(builder.Uri, cancellationToken);
-        var subscribe = JsonSerializer.SerializeToUtf8Bytes(new { type = "subscribe", peer_id = "*" });
-        await socket.SendAsync(subscribe, WebSocketMessageType.Text, true, cancellationToken);
-        return socket;
+        try
+        {
+            socket.Options.SetRequestHeader("Authorization", "Bearer " + _session);
+            await socket.ConnectAsync(builder.Uri, cancellationToken);
+            var subscribe = JsonSerializer.SerializeToUtf8Bytes(new { type = "subscribe", peer_id = "*" });
+            await socket.SendAsync(subscribe, WebSocketMessageType.Text, true, cancellationToken);
+            return socket;
+        }
+        catch { socket.Dispose(); throw; }
     }
 
     internal async Task HeartbeatAsync(CancellationToken cancellationToken = default)

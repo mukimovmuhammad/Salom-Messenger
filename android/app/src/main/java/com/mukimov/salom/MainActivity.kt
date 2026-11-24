@@ -70,6 +70,10 @@ internal data class IncomingCallIntent(val callId: String, val peerId: String, v
 private val savedPerson = Person("saved", "Избранное", "★", Yellow, "Сообщения и заметки для себя")
 
 class MainActivity : ComponentActivity() {
+    internal companion object {
+        @Volatile var visible = false
+            private set
+    }
     private val updater by lazy { androidx.lifecycle.ViewModelProvider(this)[AppUpdater::class.java] }
     private var notificationPeer by mutableStateOf<String?>(null)
     private var incomingCall by mutableStateOf<IncomingCallIntent?>(null)
@@ -93,14 +97,17 @@ class MainActivity : ComponentActivity() {
         val peerId = intent.getStringExtra("incoming_call_peer") ?: return@let null
         IncomingCallIntent(callId, peerId, intent.getStringExtra("incoming_call_name") ?: "Входящий звонок", intent.getStringExtra("incoming_call_action"), intent.getBooleanExtra("incoming_call_video", false))
     }
+    override fun onStart() {
+        super.onStart()
+        visible = true
+    }
     override fun onResume() {
         super.onResume()
-        getSharedPreferences("salom_local", MODE_PRIVATE).edit().putBoolean("app_visible", true).apply()
         PushNotifications.sync(this)
         updater.onResume()
     }
     override fun onStop() {
-        getSharedPreferences("salom_local", MODE_PRIVATE).edit().putBoolean("app_visible", false).apply()
+        visible = false
         super.onStop()
     }
 }
@@ -216,7 +223,7 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
     val scheme = if (dark) darkColorScheme(primary = Yellow, onPrimary = Ink, background = Color(0xFF171816), surface = Color(0xFF232420), secondaryContainer = Color(0xFF494125))
     else lightColorScheme(primary = Yellow, onPrimary = Ink, background = Soft, surface = Color.White, onSurface = Ink, secondaryContainer = Color(0xFFFFF0B2))
     SideEffect {
-        store.prefs.edit().putBoolean("app_visible", signedIn && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)).putString("active_peer_id", activeChat?.id?.takeUnless { it == "saved" }).apply()
+        store.prefs.edit().putString("active_peer_id", activeChat?.id?.takeUnless { it == "saved" }).apply()
         (context as? ComponentActivity)?.window?.let { window ->
             WindowCompat.getInsetsController(window, window.decorView).apply {
                 isAppearanceLightStatusBars = activeChat == null && !dark
@@ -320,9 +327,9 @@ private fun Chats(context: Context, store: Store, accounts: List<SalomAccount>, 
     var search by remember { mutableStateOf("") }
     var remoteChats by remember { mutableStateOf<List<ConversationPreview>>(emptyList()) }
     var inboxError by remember { mutableStateOf<String?>(null) }
-    val localCache = remember(context) { LocalChatCache(context) }
+    val localCache = remember(context, directory.ownId) { LocalChatCache(context, directory.ownId) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(directory) {
+    LaunchedEffect(directory, localCache) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             remoteChats = localCache.conversations()
             while (isActive) {

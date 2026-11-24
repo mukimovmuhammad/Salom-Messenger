@@ -654,8 +654,6 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
     text = body.text.strip()
     if not text and not body.attachment_id: raise HTTPException(400, 'Сообщение не может быть пустым')
     if body.recipient_id == me['id']: raise HTTPException(400, 'Для личных заметок используй Избранное')
-    # Redis shares per-account request limits across the API workers.
-    throttle('send-message:' + me['id'], limit=60)
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         media.lock_sender(db, me['id'])
@@ -664,6 +662,8 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
             if existing['recipient_id'] != body.recipient_id or existing['text'] != text or existing['attachment_id'] != body.attachment_id or existing['reply_to_id'] != body.reply_to_id:
                 raise HTTPException(409, 'Этот идентификатор уже использован для другого сообщения')
             return message_json(existing, db)
+        # A retry acknowledges an existing row even when the new-message quota is exhausted.
+        throttle('send-message:' + me['id'], limit=60)
         if not db.execute('SELECT id FROM profiles WHERE id=? AND is_active=1', (body.recipient_id,)).fetchone():
             raise HTTPException(404, 'Получатель недоступен')
         if body.reply_to_id is not None:
@@ -725,12 +725,13 @@ def create_call(body: CallCreateInput, authorization: str | None = Header(defaul
     try: peer_id = str(UUID(body.peer_id))
     except ValueError: raise HTTPException(422, 'Неверный профиль')
     if peer_id == me['id']: raise HTTPException(400, 'Нельзя позвонить себе')
-    now = time.time(); call_id = str(uuid.uuid4())
+    call_id = str(uuid.uuid4())
     with connect() as db:
         if PG_DSN:
             db.execute('SELECT id FROM profiles WHERE id IN (?,?) ORDER BY id FOR UPDATE', (me['id'], peer_id)).fetchall()
         else:
             db.execute('BEGIN IMMEDIATE')
+        now = time.time()
         peer = db.execute('SELECT id FROM profiles WHERE id=? AND is_active=1', (peer_id,)).fetchone()
         if not peer: raise HTTPException(404, 'Профиль недоступен')
         active = db.execute("SELECT 1 FROM call_sessions WHERE state IN ('ringing','accepted') AND expires>? AND (caller_id IN (?,?) OR callee_id IN (?,?)) LIMIT 1", (now, me['id'],peer_id,me['id'],peer_id)).fetchone()
@@ -750,12 +751,12 @@ def update_call(call_id: str, body: CallStateInput, authorization: str | None = 
     me = current_profile(authorization)
     try: call_id = str(UUID(call_id))
     except ValueError: raise HTTPException(404, 'Звонок не найден')
-    now = time.time()
     with connect() as db:
         if not PG_DSN:
             db.execute('BEGIN IMMEDIATE')
         call = db.execute('SELECT * FROM call_sessions WHERE id=?' + (' FOR UPDATE' if PG_DSN else ''), (call_id,)).fetchone()
         if not call or me['id'] not in (call['caller_id'], call['callee_id']): raise HTTPException(404, 'Звонок не найден')
+        now = time.time()
         state = call['state']; action = body.action
         if state == 'ringing' and call['expires'] <= now: state = 'missed'
         if state == 'accepted' and call['expires'] <= now: state = 'ended'

@@ -95,8 +95,12 @@ try
     reopened.RemoveOutgoing(owner, outgoing.Id);
     Check(store.Outbox(owner).Count == 0, "Confirmed outbox item not removed");
 
-    store.Save(peer.Id, [new ChatMessage(22, "QA edited", true, DateTime.Now, replyText: "reply", replyId: 17, edited: true, myReaction: "👍", peerReaction: "👍")]);
-    var edited = reopened.Load(peer.Id).Single();
+    store.Save(owner, peer.Id, [new ChatMessage(22, "QA edited", true, DateTime.Now, replyText: "reply", replyId: 17, edited: true, myReaction: "👍", peerReaction: "👍")]);
+    store.SaveCursor(owner, peer.Id, 22, 9, 5);
+    var edited = reopened.Load(owner, peer.Id).Single();
+    Check(reopened.Load("another-account", peer.Id).Count == 0 &&
+          reopened.ReadCursor("another-account", peer.Id) == default &&
+          reopened.ReadCursor(owner, peer.Id) == (22L, 9L, 5L), "Chat history and cursor must be scoped to the account");
     Check(edited.Edited && edited.ReplyId == 17, "Edit and quote metadata did not survive restart");
     Check(edited.ReactionLabel == "👍 2", "Reactions did not survive restart or aggregate");
     Console.WriteLine("Windows voice AAC, durable outbox, account isolation, edit and quote checks passed.");

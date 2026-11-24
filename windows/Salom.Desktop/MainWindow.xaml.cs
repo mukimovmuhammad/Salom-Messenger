@@ -1,4 +1,3 @@
-using Microsoft.Toolkit.Uwp.Notifications;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
@@ -48,9 +47,9 @@ public partial class MainWindow : Window
     private bool _exitRequested;
     private readonly HashSet<string> _seenInvites = new();
     private readonly Queue<string> _inviteOrder = new();
-    private readonly HashSet<long> _notifiedMessages = new();
-    private readonly Queue<long> _notificationOrder = new();
+    private readonly RecentNotificationIds _notifiedMessages = new();
     private string? _notificationPeer;
+    private Guid? _pendingNotificationPeer;
     private CancellationTokenSource? _realtimeCancellation;
     private CancellationTokenSource? _transfer;
     private bool _drainingOutbox;
@@ -111,8 +110,6 @@ public partial class MainWindow : Window
         {
             if (_notificationPeer is { } peerId) await OpenNotificationChatAsync(peerId);
         });
-        try { ToastNotificationManagerCompat.OnActivated += OnToastActivated; }
-        catch (Exception error) { System.Diagnostics.Trace.TraceWarning("SALOM toast registration failed: {0}", error.GetType().Name); }
         ChatsList.ItemsSource = _chats;
         MessagesList.ItemsSource = _messages;
         Loaded += Window_Loaded;
@@ -144,7 +141,12 @@ public partial class MainWindow : Window
         if (!_client.HasSession) return;
         LoginStatus.Text = "Проверяю сохранённый вход…";
         try { await _client.ValidateSessionAsync(); await ShowWorkspaceAsync(); }
-        catch (Exception error) { LoginStatus.Text = "Сессия истекла. Войди через Google ещё раз. " + error.Message; }
+        catch (Exception) when (_client.HasSession)
+        {
+            await ShowWorkspaceAsync();
+            SetConnection("●  офлайн", false);
+        }
+        catch (Exception) { LoginStatus.Text = "Сессия истекла. Войди через Google или email."; }
     }
 
     private async void GoogleSignIn_Click(object sender, RoutedEventArgs e)
@@ -188,6 +190,11 @@ public partial class MainWindow : Window
         _realtimeCancellation = new CancellationTokenSource();
         _ = RealtimeLoopAsync(_realtimeCancellation.Token);
         _ = RetryOutboxAsync(_realtimeCancellation.Token);
+        if (_pendingNotificationPeer is { } peer)
+        {
+            _pendingNotificationPeer = null;
+            await OpenNotificationChatAsync(peer.ToString());
+        }
     }
 
     private async Task RetryOutboxAsync(CancellationToken token)
@@ -202,9 +209,11 @@ public partial class MainWindow : Window
 
     private async Task LoadConversationsAsync()
     {
+        if (PhotoCacheScope is not { } scope) return;
         try
         {
             var conversations = await _client.ConversationsAsync();
+            if (PhotoCacheScope != scope) return;
             var selected = _activeChat;
             _chats.Clear(); foreach (var chat in conversations) _chats.Add(chat);
             if (selected is not null)
@@ -255,20 +264,18 @@ public partial class MainWindow : Window
 
     private async void ChatsList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (ChatsList.SelectedItem is not ChatItem chat) return;
+        if (ChatsList.SelectedItem is not ChatItem chat || PhotoCacheScope is not { } scope) return;
         if (_activeChat?.Id == chat.Id) { _activeChat = chat; return; }
         _historyRevision++;
-        _clearedThrough = _eventCursor = 0;
+        (_messageCursor, _eventCursor, _clearedThrough) = _store.ReadCursor(scope, chat.Id);
         _removedMessages.Clear();
         if (_editingMessage != null) MessageBox.Clear();
         _editingMessage = null;
         SetReply(null);
         _peerOnline = false;
         _activeChat = chat; PeerName.Text = chat.Name; PeerUsername.Text = string.IsNullOrWhiteSpace(chat.Username) ? "" : "@" + chat.Username;
-        _messages.Clear(); foreach (var message in _store.Load(chat.Id)) _messages.Add(message);
-        _messageCursor = _messages.Count == 0 ? 0 : _messages.Max(message => message.Id);
-        if (PhotoCacheScope is { } scope)
-            foreach (var item in _store.Outbox(scope, chat.Id)) ShowOutgoing(item, "В очереди");
+        _messages.Clear(); foreach (var message in _store.Load(scope, chat.Id)) _messages.Add(message);
+        foreach (var item in _store.Outbox(scope, chat.Id)) ShowOutgoing(item, "В очереди");
         ScrollToLatest();
         await SyncSelectedChatAsync(true);
     }
@@ -359,9 +366,9 @@ public partial class MainWindow : Window
             if (chatIndex >= 0) _chats[chatIndex] = peer with { Preview = preview };
             if (_activeChat?.Id == peerId)
             {
-                if (AddVisibleMessage(message))
+                if (AddVisibleMessage(message) && PhotoCacheScope is { } scope)
                 {
-                    _store.Save(peer.Id, new[] { message });
+                    _store.Save(scope, peer.Id, new[] { message });
                     ScrollToLatest();
                 }
             }
@@ -432,8 +439,6 @@ public partial class MainWindow : Window
     private void NotifyIncoming(long messageId, string peerId, string title, string body)
     {
         if (!_notifiedMessages.Add(messageId)) return;
-        _notificationOrder.Enqueue(messageId);
-        if (_notificationOrder.Count > 512) _notifiedMessages.Remove(_notificationOrder.Dequeue());
         if (_preferences.PrivateNotificationPreview) { title = "Салом"; body = "Новое сообщение"; }
         if (IsVisible && IsActive && WindowState != WindowState.Minimized)
         {
@@ -441,14 +446,8 @@ public partial class MainWindow : Window
             return;
         }
         var preview = body.Length > 110 ? body[..110] + "…" : body;
-        try
+        if (!DesktopMessageToast.TryShow(messageId, peerId, title, preview))
         {
-            new ToastContentBuilder().AddArgument("peer", peerId).AddText("Салом · " + title).AddText(preview)
-                .Show(toast => { toast.Tag = messageId.ToString(); toast.Group = "messages"; });
-        }
-        catch (Exception error)
-        {
-            System.Diagnostics.Trace.TraceWarning("SALOM toast failed: {0}", error.GetType().Name);
             _notificationPeer = peerId;
             _trayIcon.ShowBalloonTip(4500, "Салом · " + title, preview, System.Windows.Forms.ToolTipIcon.Info);
         }
@@ -461,11 +460,10 @@ public partial class MainWindow : Window
         Activate();
     }
 
-    private void OnToastActivated(ToastNotificationActivatedEventArgsCompat activation)
+    internal void ActivateNotification(Guid peer)
     {
-        var args = ToastArguments.Parse(activation.Argument);
-        if (args.TryGetValue("peer", out var peer) && Guid.TryParse(peer, out _))
-            _ = Dispatcher.InvokeAsync(async () => await OpenNotificationChatAsync(peer));
+        if (Workspace.Visibility != Visibility.Visible || !IsLoaded) _pendingNotificationPeer = peer;
+        else _ = OpenNotificationChatAsync(peer.ToString());
     }
 
     private async Task OpenNotificationChatAsync(string peerId)
@@ -484,7 +482,7 @@ public partial class MainWindow : Window
 
     private async Task SyncSelectedChatAsync(bool reportErrors)
     {
-        if (_activeChat is null || !IsActive || Workspace.Visibility != Visibility.Visible) return;
+        if (_activeChat is null || PhotoCacheScope is not { } scope || !IsActive || Workspace.Visibility != Visibility.Visible) return;
         if (_syncInProgress) { _syncAgain = true; return; }
         _syncInProgress = true;
         try
@@ -492,21 +490,25 @@ public partial class MainWindow : Window
             var chat = _activeChat;
             var revision = _historyRevision;
             var history = await _client.MessagesAsync(chat.Id, _messageCursor, _eventCursor);
-            if (revision != _historyRevision) { _syncAgain = true; return; }
-            _eventCursor = history.EventCursor;
-            if (history.Messages.Count > 0) _messageCursor = Math.Max(_messageCursor, history.Messages[^1].Id);
+            if (revision != _historyRevision || PhotoCacheScope != scope) { _syncAgain = true; return; }
             var removed = history.Events.Where(change => change.Kind is "hide" or "delete").Select(change => change.MessageId).ToArray();
-            ApplyRemoval(chat.Id, history.ClearedThrough, removed);
-            var incoming = history.Messages.Where(AddVisibleMessage).ToList();
+            ApplyRemoval(scope, chat.Id, history.ClearedThrough, removed);
+            var incoming = history.Messages.Where(message => message.Id > _clearedThrough && !_removedMessages.Contains(message.Id)).ToList();
+            if (incoming.Count > 0) _store.Save(scope, chat.Id, incoming);
+            var added = incoming.Count(AddVisibleMessage);
             foreach (var change in history.Events)
             {
                 if (change.Edited is not { } edited || _removedMessages.Contains(edited.Id) || edited.Id <= _clearedThrough) continue;
                 var previous = _messages.FirstOrDefault(message => message.Id == edited.Id);
                 if (previous == null) continue;
+                _store.Save(scope, chat.Id, new[] { edited });
                 _messages[_messages.IndexOf(previous)] = edited;
-                incoming.Add(edited);
             }
-            if (incoming.Count > 0) { _store.Save(chat.Id, incoming); ScrollToLatest(); }
+            var nextMessage = Math.Max(_messageCursor, Math.Max(history.ClearedThrough, history.Messages.LastOrDefault()?.Id ?? 0));
+            _store.SaveCursor(scope, chat.Id, nextMessage, history.EventCursor, _clearedThrough);
+            _eventCursor = history.EventCursor;
+            _messageCursor = nextMessage;
+            if (added > 0) ScrollToLatest();
             if (chat.UnreadCount > 0 || incoming.Count > 0 || removed.Length > 0) await LoadConversationsAsync();
             ConnectionState.Text = "●  синхронизировано"; ConnectionState.Foreground = System.Windows.Media.Brushes.LightGreen;
         }
@@ -545,7 +547,7 @@ public partial class MainWindow : Window
 
     private async Task SendMessageAsync()
     {
-        if (_activeChat is not { } chat) { ShowToast("Сначала выбери чат"); return; }
+        if (_activeChat is not { } chat || PhotoCacheScope is not { } scope) { ShowToast("Сначала выбери чат"); return; }
         var text = MessageBox.Text.Trim();
         if (text.Length == 0) return;
         if (_editingMessage is { } edit)
@@ -555,7 +557,7 @@ public partial class MainWindow : Window
             try
             {
                 var changed = await _client.EditMessageAsync(edit.Id, text);
-                _store.Save(chat.Id, new[] { changed });
+                _store.Save(scope, chat.Id, new[] { changed });
                 if (_editingMessage != edit || _activeChat?.Id != chat.Id) return;
                 if (_messages.FirstOrDefault(message => message.Id == edit.Id) is { } old)
                     _messages[_messages.IndexOf(old)] = changed;
@@ -619,7 +621,7 @@ public partial class MainWindow : Window
                         : await _client.SendAttachmentAsync(item.Peer, item.AudioPath, item.Text, item.Id,
                             new Progress<int>(), token, item.ReplyId, item.Voice);
                     TraceOutgoing(item.Id, "http_ack", elapsed.ElapsedMilliseconds);
-                    _store.Save(item.Peer.Id, new[] { sent });
+                    _store.Save(scope, item.Peer.Id, new[] { sent });
                     _store.RemoveOutgoing(scope, item.Id);
                     if (item.AudioPath != null) TryDeleteRecording(item.AudioPath);
                     if (PhotoCacheScope == scope && _activeChat?.Id == item.Peer.Id)
@@ -629,7 +631,7 @@ public partial class MainWindow : Window
                     }
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
-                catch (System.Net.Http.HttpRequestException error) when ((int?)error.StatusCode is 400 or 403 or 404 or 409 or 422)
+                catch (System.Net.Http.HttpRequestException error) when ((int?)error.StatusCode is 400 or 403 or 404 or 409 or 413 or 422)
                 {
                     _failedOutgoing.Add(item.Id);
                     ShowOutgoing(item, "Не отправлено · повторить через меню");
@@ -756,7 +758,7 @@ public partial class MainWindow : Window
     private async void File_Click(object sender, RoutedEventArgs e)
     {
         if (_transfer is { } active) { active.Cancel(); return; }
-        if (_activeChat is not { } chat) { ShowToast("Сначала выбери чат"); return; }
+        if (_activeChat is not { } chat || PhotoCacheScope is not { } uploadScope) { ShowToast("Сначала выбери чат"); return; }
         var upload = _pendingUpload;
         if (upload?.Peer.Id == chat.Id)
         {
@@ -777,9 +779,9 @@ public partial class MainWindow : Window
         {
             var sent = await _client.SendAttachmentAsync(upload.Peer, upload.Path, upload.Text, upload.Id, progress, token, upload.Reply?.Id);
             _pendingUpload = null;
-            if (_activeChat?.Id == upload.Peer.Id)
+            if (PhotoCacheScope == uploadScope && _activeChat?.Id == upload.Peer.Id)
             {
-                if (AddVisibleMessage(sent)) _store.Save(upload.Peer.Id, new[] { sent });
+                if (AddVisibleMessage(sent)) _store.Save(uploadScope, upload.Peer.Id, new[] { sent });
                 ScrollToLatest();
                 if (MessageBox.Text.Trim() == upload.Text) MessageBox.Clear();
                 if (_replyTo == upload.Reply) SetReply(null);
@@ -806,14 +808,14 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private void ApplyRemoval(string peerId, long clearedThrough, long[] removed)
+    private void ApplyRemoval(string scope, string peerId, long clearedThrough, long[] removed)
     {
         if (clearedThrough <= _clearedThrough && removed.Length == 0) return;
-        _store.RemoveHistory(peerId, clearedThrough, removed);
+        _store.RemoveHistory(scope, peerId, clearedThrough, removed);
         _clearedThrough = Math.Max(clearedThrough, _clearedThrough);
         _removedMessages.UnionWith(removed);
         for (var index = _messages.Count - 1; index >= 0; index--)
-            if (_messages[index].Id <= _clearedThrough || _removedMessages.Contains(_messages[index].Id))
+            if (_messages[index].Id > 0 && (_messages[index].Id <= _clearedThrough || _removedMessages.Contains(_messages[index].Id)))
                 _messages.RemoveAt(index);
         if (_replyTo is { } reply && (reply.Id <= _clearedThrough || _removedMessages.Contains(reply.Id))) SetReply(null);
     }
@@ -919,7 +921,7 @@ public partial class MainWindow : Window
 
     private async void DeleteMessage_Click(object sender, RoutedEventArgs e)
     {
-        if (_historyAction || _activeChat is not { } chat ||
+        if (_historyAction || _activeChat is not { } chat || PhotoCacheScope is not { } account ||
             sender is not System.Windows.Controls.MenuItem { DataContext: ChatMessage message, Tag: string scope } ||
             !_messages.Contains(message)) return;
         var everyone = scope == "everyone";
@@ -931,8 +933,9 @@ public partial class MainWindow : Window
         try
         {
             await _client.DeleteMessageAsync(message.Id, everyone);
-            if (_activeChat?.Id == chat.Id) { _historyRevision++; ApplyRemoval(chat.Id, 0, new[] { message.Id }); }
-            else _store.RemoveHistory(chat.Id, 0, new[] { message.Id });
+            if (PhotoCacheScope != account) return;
+            if (_activeChat?.Id == chat.Id) { _historyRevision++; ApplyRemoval(account, chat.Id, 0, new[] { message.Id }); }
+            else _store.RemoveHistory(account, chat.Id, 0, new[] { message.Id });
             await LoadConversationsAsync();
         }
         catch (Exception error) { ShowToast(error.Message); }
@@ -948,15 +951,16 @@ public partial class MainWindow : Window
 
     private async void ClearChat_Click(object sender, RoutedEventArgs e)
     {
-        if (_historyAction || _activeChat is not { } chat) return;
+        if (_historyAction || _activeChat is not { } chat || PhotoCacheScope is not { } account) return;
         if (System.Windows.MessageBox.Show(this, $"Очистить историю чата с {chat.Name} только у себя?",
             "Очистка диалога", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         _historyAction = true;
         try
         {
             var cutoff = await _client.ClearChatAsync(chat.Id);
-            if (_activeChat?.Id == chat.Id) { _historyRevision++; ApplyRemoval(chat.Id, cutoff, Array.Empty<long>()); }
-            else _store.RemoveHistory(chat.Id, cutoff, Array.Empty<long>());
+            if (PhotoCacheScope != account) return;
+            if (_activeChat?.Id == chat.Id) { _historyRevision++; ApplyRemoval(account, chat.Id, cutoff, Array.Empty<long>()); }
+            else _store.RemoveHistory(account, chat.Id, cutoff, Array.Empty<long>());
             await LoadConversationsAsync();
         }
         catch (Exception error) { ShowToast(error.Message); }
@@ -1009,6 +1013,29 @@ public partial class MainWindow : Window
         menu.IsOpen = true;
     }
 
+    private void Update_Click(object sender, RoutedEventArgs e)
+    {
+        if (CallWindow.Active != null || _transfer != null || _recorder != null)
+        {
+            ShowToast("Заверши звонок, запись или передачу файла перед обновлением.");
+            return;
+        }
+        var check = new UpdateWindow { Owner = this };
+        if (check.ShowDialog() != true || check.Installer is not { } installer) return;
+        try
+        {
+            using var setup = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(installer, "--update")
+                { UseShellExecute = true });
+            if (setup is null) throw new InvalidOperationException();
+            _exitRequested = true;
+            Close();
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            ShowToast("Не удалось открыть установщик. Попробуй обновить ещё раз.");
+        }
+    }
+
     private void SignOut_Click(object sender, RoutedEventArgs e)
     {
         if (System.Windows.MessageBox.Show(this, "Выйти из аккаунта на этом компьютере?", "Аккаунт",
@@ -1017,7 +1044,7 @@ public partial class MainWindow : Window
         _transfer?.Cancel(); _pendingUpload = null;
         _historyRevision++;
         CancelComposerAction();
-        _client.SignOut(); _notificationPeer = null; _activeChat = null; _chats.Clear(); _messages.Clear();
+        _client.SignOut(); _notificationPeer = null; _pendingNotificationPeer = null; _activeChat = null; _chats.Clear(); _messages.Clear();
         _realtimeCancellation?.Dispose(); _realtimeCancellation = null;
         Workspace.Visibility = Visibility.Collapsed; LoginPane.Visibility = Visibility.Visible;
         ConnectionState.Text = "●  отключено"; LoginStatus.Text = "Ты вышел из аккаунта на этом компьютере.";
@@ -1033,11 +1060,12 @@ public partial class MainWindow : Window
         base.OnClosing(e);
     }
 
+    internal bool ShouldContinueNotifications => !_exitRequested && _client.HasSession;
+
     protected override void OnClosed(EventArgs e)
     {
         _incomingPrompt?.EndRemote();
         _activeVoice?.Stop();
-        ToastNotificationManagerCompat.OnActivated -= OnToastActivated;
         _transfer?.Cancel();
         _realtimeCancellation?.Cancel();
         _realtimeCancellation?.Dispose();

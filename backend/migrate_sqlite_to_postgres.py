@@ -21,12 +21,14 @@ TABLES = {
     "attachments": ("id", "owner_id", "peer_id", "name", "mime", "size", "created", "ready", "kind", "duration_ms", "waveform", "sha256"),
     "conversation_clears": ("owner_id", "peer_id", "through_id"),
     "messages": ("id", "sender_id", "recipient_id", "client_id", "text", "created", "delivered_at", "read_at", "reply_to_id", "edited_at", "location_id", "attachment_id"),
+    "message_reactions": ("message_id", "actor_id", "emoji"),
     "message_events": ("id", "message_id", "sender_id", "recipient_id", "owner_id", "kind"),
     "message_hides": ("owner_id", "message_id"),
     "live_locations": ("id", "owner_id", "peer_id", "created", "expires", "latitude", "longitude", "updated", "active"),
     "accounts": ("profile_id", "firebase_uid", "phone", "email", "password_hash", "created", "password_changed", "google_linked"),
     "email_identities": ("profile_id",),
     "sessions": ("token_hash", "profile_id", "created", "expires", "verified_at"),
+    "session_devices": ("token_hash", "label"),
     # Retain the now-unused legacy table from the live SQLite database for a faithful migration.
     "email_challenges": ("id", "email", "code_hash", "expires", "created", "attempts", "ready", "verified", "ticket_hash", "used"),
     "auth_limits": ("key", "at"),
@@ -43,6 +45,7 @@ ORDER_COLUMNS = {
     "live_locations": ("id",), "accounts": ("profile_id",), "sessions": ("token_hash",), "email_challenges": ("id",),
     "auth_limits": ("key", "at"), "push_tokens": ("profile_id",), "push_jobs": ("message_id",),
     "call_sessions": ("id",), "call_push_jobs": ("call_id",),
+    "message_reactions": ("message_id", "actor_id"), "session_devices": ("token_hash",),
 }
 LEGACY_DEFAULTS = {"attachments": {"sha256": "NULL"}, "call_sessions": {"media_mode": "'audio'"}}
 
@@ -104,6 +107,15 @@ CREATE TABLE sessions (
   token_hash TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   created DOUBLE PRECISION NOT NULL, expires DOUBLE PRECISION NOT NULL,
   verified_at DOUBLE PRECISION NOT NULL
+);
+CREATE TABLE session_devices (
+  token_hash TEXT PRIMARY KEY REFERENCES sessions(token_hash) ON DELETE CASCADE,
+  label TEXT NOT NULL
+);
+CREATE TABLE message_reactions (
+  message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  actor_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL, PRIMARY KEY(message_id, actor_id)
 );
 CREATE TABLE email_challenges (
   id TEXT PRIMARY KEY, email TEXT NOT NULL, code_hash TEXT NOT NULL,
@@ -172,7 +184,8 @@ def validate_source(path: Path):
         raise ValueError(f"SQLite integrity check failed: {integrity}")
     found_tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     expected_tables = set(TABLES)
-    optional_tables = {"call_sessions", "call_push_jobs", "profile_avatars", "email_identities"}
+    optional_tables = {"call_sessions", "call_push_jobs", "profile_avatars", "email_identities",
+                       "message_reactions", "session_devices"}
     if found_tables - expected_tables or expected_tables - found_tables - optional_tables:
         db.close()
         raise ValueError("Unexpected SQLite table set; refusing to omit or invent user data")

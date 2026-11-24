@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -57,6 +58,19 @@ class CallLeaseTests(unittest.TestCase):
         self.clock.return_value = 1046.0
         self.assertEqual(self.action(call, self.b, 'accept_leased'), 'missed')
         self.assertNotEqual(self.create(), call)
+
+    def test_accept_uses_time_after_database_wait(self):
+        call = self.create()
+        open_db = app.connect
+
+        @contextmanager
+        def delayed_connection():
+            with open_db() as db:
+                self.clock.return_value = 1046.0
+                yield db
+
+        with patch.object(app, 'connect', delayed_connection):
+            self.assertEqual(self.action(call, self.b, 'accept_leased'), 'missed')
 
     def test_audio_default_and_explicit_video_mode(self):
         first = self.create()

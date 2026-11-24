@@ -3,5 +3,9 @@
   <ItemGroup>
     <Compile Include="..\Salom.Desktop\ComposerInputPolicy.cs" Link="ComposerInputPolicy.cs" />
     <Compile Include="..\Salom.Desktop\DesktopNotificationPolicy.cs" Link="DesktopNotificationPolicy.cs" />
+    <Compile Include="..\Salom.Desktop\DesktopInstance.cs" Link="DesktopInstance.cs" />
+    <Compile Include="..\Salom.Desktop\DesktopUpdates.cs" Link="DesktopUpdates.cs" />
+    <Compile Include="..\Salom.Desktop\DesktopBuildVersion.cs" Link="DesktopBuildVersion.cs" />
+    <Compile Include="..\Salom.Setup\InstallPayload.cs" Link="InstallPayload.cs" />
   </ItemGroup>
 </Project>
