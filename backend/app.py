@@ -29,6 +29,7 @@ from realtime import RealtimeHub
 from push import PushDispatcher
 from auth import SESSION_DEVICE_SCHEMA, schema as auth_schema, install_routes as install_auth_routes
 from monitoring import RuntimeMetrics, RuntimeReporter
+from cloudflare_turn import issue_turn_servers
 
 DB = Path(os.environ.get('SALOM_DB', '/var/lib/salom-api/directory.sqlite3'))
 PG_DSN = os.environ.get('SALOM_DATABASE_URL', '').strip()
@@ -699,8 +700,17 @@ class CallCreateInput(BaseModel):
 
 @app.get('/calls/config')
 def call_config(authorization: str | None = Header(default=None)):
-    current_profile(authorization)
+    me = current_profile(authorization)
     servers = [{'urls':['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']}]
+    cloudflare_key = os.environ.get('SALOM_CLOUDFLARE_TURN_KEY_ID', '').strip()
+    cloudflare_token = os.environ.get('SALOM_CLOUDFLARE_TURN_TOKEN', '').strip()
+    if cloudflare_key and cloudflare_token:
+        throttle(('cloudflare-turn', me['id']), limit=12)
+        throttle('cloudflare-turn-global', limit=120)
+        relay = issue_turn_servers(cloudflare_key, cloudflare_token, CALL_MAX_DURATION_SECONDS + 300)
+        if relay:
+            return {'ice_servers': servers + relay}
+
     urls = [item.strip() for item in os.environ.get('SALOM_TURN_URLS','').split(',') if item.strip()]
     secret = os.environ.get('SALOM_TURN_SECRET','')
     if urls and secret:

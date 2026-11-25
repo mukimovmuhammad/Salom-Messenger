@@ -18,7 +18,16 @@ STUN is included as a connectivity fallback. Calls may fail on carrier-grade NAT
 - `SALOM_TURN_URLS`: comma-separated `turn:`/`turns:` URLs, including transport/port where needed.
 - `SALOM_TURN_SECRET`: the shared `static-auth-secret` configured in coturn. Keep it only in the server secret store; never place it in Android or Git.
 
-The TURN service itself is not installed or deployed by this change. A production rollout still needs coturn, UDP/TCP reachability, TLS for `turns:` where used, and a connection test from the intended mobile networks.
+For Cloudflare Realtime TURN, configure `SALOM_CLOUDFLARE_TURN_KEY_ID` and `SALOM_CLOUDFLARE_TURN_TOKEN` in a protected systemd environment file on the API host. SALOM issues credentials only for authenticated profiles, rate-limits requests, and keeps the existing client response format. The credential lifetime covers the server's four-hour call limit plus five minutes of setup. On a provider failure the API falls back to the configured coturn relay, or to the built-in STUN servers.
+
+Before switching traffic, verify that the VPS can reach `rtc.live.cloudflare.com` on HTTPS and that a client can establish a Cloudflare relay allocation over TLS on TCP 443. Test Android and Windows on separate networks afterwards. To revert, remove the Cloudflare systemd drop-in, reload systemd and restart the API. Check Cloudflare Realtime usage against the account's included allowance.
+
+### Rotate the Cloudflare TURN key
+
+1. Create a second TURN key in Cloudflare Realtime. Transfer the new key and token through a protected file. Keep the token out of command arguments and shell history.
+2. Stage a root-only environment file and verify with `issue_turn_servers` that the new key issues credentials for `turns:turn.cloudflare.com:443?transport=tcp`. Verify a TLS relay allocation using those temporary credentials. Print only the outcome.
+3. With an approved maintenance window, back up `/etc/salom-api/cloudflare-turn.env` under a root-only directory. Atomically replace it with the staged file (owner root, mode `0600`) and restart `salom-api`. Check public and internal health and verify that an authenticated client can start a new relay call.
+4. Restore the previous environment file and restart the service if checks fail. Once the new key is verified, revoke the previous key in Cloudflare and remove temporary secret files. Review Cloudflare usage for unexpected traffic.
 
 ## Android behavior and rollout notes
 

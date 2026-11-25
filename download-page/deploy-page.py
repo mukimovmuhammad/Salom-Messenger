@@ -11,7 +11,7 @@ from tempfile import NamedTemporaryFile
 root = Path('/var/www/salom-site')
 paths = (
     'site-161.css',
-    'site-161.js',
+    'site-162.js',
     'privacy/index.html',
     'terms/index.html',
     'index.html',
@@ -35,7 +35,7 @@ def deploy(source):
         if not path.is_file() or not path.stat().st_size:
             raise ValueError(f'Missing site file: {name}')
     page = (source / 'index.html').read_text(encoding='utf-8')
-    for marker in ('href="/site-161.css"', 'src="/site-161.js"', 'data-abi="arm64-v8a"', 'data-abi="armeabi-v7a"'):
+    for marker in ('href="/site-161.css"', 'src="/site-162.js"', 'data-abi="arm64-v8a"', 'data-abi="armeabi-v7a"'):
         if marker not in page:
             raise ValueError(f'Missing landing page marker: {marker}')
 

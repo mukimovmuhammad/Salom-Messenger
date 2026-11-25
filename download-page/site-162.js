@@ -80,7 +80,16 @@ async function loadRelease() {
   if (!response.ok) return;
   const info = await response.json();
   if (typeof info.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(info.version) || !validSize(info.size)) return;
-  if (info.version !== '0.16.0') document.querySelector('.release time').hidden = true;
+  const releaseDate = document.querySelector('.release time');
+  if (releaseDate && typeof info.releaseDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(info.releaseDate)) {
+    const date = new Date(info.releaseDate + 'T00:00:00Z');
+    if (!Number.isNaN(date.valueOf())) {
+      releaseDate.dateTime = info.releaseDate;
+      releaseDate.textContent = new Intl.DateTimeFormat('ru', {
+        day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'
+      }).format(date);
+    }
+  }
   const label = info.version + (typeof info.displayName === 'string' && info.displayName ? ' ' + info.displayName : '');
   document.querySelectorAll('[data-version]').forEach(node => { node.textContent = label; });
 

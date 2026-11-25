@@ -11,6 +11,7 @@ public partial class CallWindow : Window
     private readonly string _callId;
     private readonly bool _isCaller;
     private readonly bool _video;
+    private readonly string _peerName;
     private bool _ended;
     private bool _webReady;
     private bool _callAccepted;
@@ -26,6 +27,7 @@ public partial class CallWindow : Window
         InitializeComponent();
         WindowAppearance.UseDarkCaption(this);
         _video = video;
+        _peerName = peerName;
         _client = client; _callId = callId; _isCaller = isCaller;
         Title = (isCaller ? "Звоним: " : "Звонок: ") + peerName;
         Active = this;
@@ -54,10 +56,10 @@ public partial class CallWindow : Window
             _ended = true;
             _connectionTimer.Stop();
             _leaseTimer.Stop();
-            CallStatus.Text = state.GetString() switch
+            ShowStatus(state.GetString() switch
             {
                 "declined" => "Звонок отклонён", "missed" => "Нет ответа", _ => "Звонок завершён"
-            };
+            });
             await Task.Delay(1200);
             if (IsLoaded) Close();
             return;
@@ -79,12 +81,13 @@ public partial class CallWindow : Window
         if (type == "call_signal" && payload.TryGetProperty("kind", out var kind) && payload.TryGetProperty("payload", out var data))
         {
             var json = JsonSerializer.Serialize(new { kind = kind.GetString(), payload = data });
-            await Dispatcher.InvokeAsync(async () => await CallBrowser.ExecuteScriptAsync($"window.salomReceive({JsonSerializer.Serialize(json)})"));
+            await CallBrowser.ExecuteScriptAsync($"window.salomReceive({JsonSerializer.Serialize(json)})");
         }
         else if (type == "call_state" && payload.TryGetProperty("state", out var accepted) && accepted.GetString() == "accepted" && _isCaller && !_callAccepted)
         {
             _callAccepted = true;
             _connectionTimer.Start();
+            _leaseTimer.Start();
             await CallBrowser.ExecuteScriptAsync("window.salomCreateOffer()");
         }
     }
@@ -114,7 +117,7 @@ public partial class CallWindow : Window
             using var config = await _client.CallConfigAsync();
             if (_ended) return;
             var ice = config.RootElement.GetProperty("ice_servers").GetRawText();
-            var script = $"window.salomStart({JsonSerializer.Serialize(ice)},{(_isCaller ? "true" : "false")},{(_video ? "true" : "false")})";
+            var script = $"window.salomStart({JsonSerializer.Serialize(ice)},{(_isCaller ? "true" : "false")},{(_video ? "true" : "false")},{JsonSerializer.Serialize(_peerName)})";
             await CallBrowser.ExecuteScriptAsync(script);
             await _mediaReady.Task.WaitAsync(TimeSpan.FromSeconds(25));
             while (!_ended && _pendingEvents.Count > 0)
@@ -125,20 +128,24 @@ public partial class CallWindow : Window
             }
             if (_ended) return;
             _webReady = true;
-            CallStatus.Text = _isCaller && !_callAccepted ? "Звоним…" : "Соединяемся…";
+            CallStatus.Visibility = Visibility.Collapsed;
             if (!_isCaller)
             {
                 using var accepted = await _client.UpdateCallAsync(_callId, "accept_leased");
                 if (_ended) return;
                 _callAccepted = accepted.RootElement.GetProperty("state").GetString() == "accepted";
                 if (!_callAccepted) Close();
-                else if (!_mediaConnected) _connectionTimer.Start();
+                else
+                {
+                    _leaseTimer.Start();
+                    if (!_mediaConnected) _connectionTimer.Start();
+                }
             }
         }
         catch (Exception ex)
         {
             if (_ended) return;
-            CallStatus.Text = "Не удалось запустить звонок: " + ex.Message;
+            ShowStatus("Не удалось запустить звонок: " + ex.Message);
             await EndCallAsync();
             if (!_ended) { _ended = true; Close(); }
         }
@@ -160,18 +167,25 @@ public partial class CallWindow : Window
                 var state = root.GetProperty("value").GetString();
                 System.Diagnostics.Trace.TraceInformation("SalomCall call={0} media={1}", _callId, state);
                 _mediaConnected = state == "connected";
-                if (_mediaConnected) _leaseTimer.Start(); else _leaseTimer.Stop();
                 if (_mediaConnected) _connectionTimer.Stop();
                 else if (_callAccepted) _connectionTimer.Start();
                 if (state == "failed" && _callAccepted) { await FailConnectionAsync(); return; }
-                await Dispatcher.InvokeAsync(() => CallStatus.Text = state switch
+                if (state == "connected") CallStatus.Visibility = Visibility.Collapsed;
+            }
+            else if (type == "quality")
+            {
+                var quality = root.GetProperty("value");
+                var codec = quality.GetProperty("codec").GetString() switch
                 {
-                    "connected" => "Звонок идёт",
-                    "connecting" => "Соединяемся…",
-                    "failed" => "Не удалось соединиться. Проверьте сеть и TURN.",
-                    "disconnected" => "Восстанавливаем связь…",
-                    _ => "Соединяемся…"
-                });
+                    "video/VP8" => "VP8", "video/VP9" => "VP9", "video/H264" => "H264", "video/AV1" => "AV1", _ => "unknown",
+                };
+                var route = quality.GetProperty("route").GetString() switch
+                {
+                    "relay" => "relay", "host" or "srflx" or "prflx" => "direct", _ => "unknown",
+                };
+                System.Diagnostics.Trace.TraceInformation("SalomCall media codec={0} route={1} rtt_ms={2} video={3}x{4}@{5}",
+                    codec, route, quality.GetProperty("rtt").GetInt32(), quality.GetProperty("width").GetInt32(),
+                    quality.GetProperty("height").GetInt32(), quality.GetProperty("fps").GetDouble());
             }
             else if (type == "hangup")
             {
@@ -183,10 +197,20 @@ public partial class CallWindow : Window
             {
                 var error = root.GetProperty("value").GetString() ?? "WebRTC error";
                 _mediaReady.TrySetException(new InvalidOperationException(error));
-                await Dispatcher.InvokeAsync(() => CallStatus.Text = "Ошибка звонка: " + error);
+                ShowStatus(error is "NotAllowedError" or "NotReadableError" or "NotFoundError"
+                    ? "Проверь доступ Салома к микрофону и наличие устройства." : "Ошибка запуска звонка.");
             }
         }
-        catch (Exception ex) { await Dispatcher.InvokeAsync(() => CallStatus.Text = "Ошибка сигнализации: " + ex.Message); }
+        catch (Exception ex)
+        {
+            if (!_ended) System.Diagnostics.Trace.TraceWarning("SalomCall signaling: {0}", ex.GetType().Name);
+        }
+    }
+
+    private void ShowStatus(string status)
+    {
+        CallStatus.Text = status;
+        CallStatus.Visibility = Visibility.Visible;
     }
 
     private async Task FailConnectionAsync()
@@ -194,7 +218,7 @@ public partial class CallWindow : Window
         _connectionTimer.Stop();
         if (_ended || _mediaConnected) return;
         _ended = true;
-        CallStatus.Text = "Не удалось соединиться. Проверь интернет и попробуй снова.";
+        ShowStatus("Не удалось соединиться. Проверь интернет и попробуй снова.");
         _ = EndCallAsync();
         await Task.Delay(TimeSpan.FromSeconds(3));
         if (IsLoaded) Close();
@@ -209,7 +233,7 @@ public partial class CallWindow : Window
     private async Task RenewLeaseAsync()
     {
         _leaseTimer.Stop();
-        if (_ended || !_mediaConnected) return;
+        if (_ended || !_callAccepted) return;
         try
         {
             using var response = await _client.UpdateCallAsync(_callId, "heartbeat");
@@ -220,7 +244,7 @@ public partial class CallWindow : Window
             }
         }
         catch (Exception) { /* Offline clients cannot renew; the server expires the call. */ }
-        finally { if (!_ended && _mediaConnected) _leaseTimer.Start(); }
+        finally { if (!_ended && _callAccepted) _leaseTimer.Start(); }
     }
 
     internal static async Task<CallWindow?> StartOutgoingAsync(DesktopClient client, string peerId, string peerName, Window owner, bool video)

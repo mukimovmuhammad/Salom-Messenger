@@ -6,13 +6,13 @@
 <meta name="theme-color" content="#161713">
 <meta name="description" content="Скачай Салом для Android и Windows. Личные чаты, голосовые сообщения, фото, реакции, аудио- и видеозвонки.">
 <meta property="og:title" content="Салом — мессенджер для Android и Windows">
-<meta property="og:description" content="Скачай Салом. Чаты, звонки и файлы в одном приложении.">
+<meta property="og:description" content="Салом 0.16.2. Новый экран разговора и адаптивное видео на Android и Windows.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mukimov.site/">
 <title>Салом — скачать для Android и Windows</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ffc400'/%3E%3Cpath d='M17 18h30a4 4 0 0 1 4 4v19H30l-9 8v-8h-4a4 4 0 0 1-4-4V22a4 4 0 0 1 4-4Z' fill='%23161713'/%3E%3Cpath d='M22 26h20v3H22zm0 7h14v3H22z' fill='%23ffc400'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/site-161.css">
-<script src="/site-161.js" defer></script>
+<script src="/site-162.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Перейти к содержанию</a>
@@ -38,12 +38,12 @@
 <main id="main">
   <section class="hero shell" aria-labelledby="hero-title">
     <div class="hero-copy">
-      <a class="version" href="#changes"><i></i><span data-version>0.16.1 Stability Core</span><svg><use href="#i-next"/></svg></a>
+      <a class="version" href="#changes"><i></i><span data-version>0.16.2 Video Calls</span><svg><use href="#i-next"/></svg></a>
       <h1 id="hero-title">Просто скажи<br><em>Салом.</em></h1>
       <p>Переписывайся, звони и делись фото с близкими. Салом доступен на Android и Windows.</p>
       <div class="hero-actions">
-        <a class="button yellow" data-android-main href="/salom/salom-0.16.1.apk" download><svg><use href="#i-phone"/></svg><span>Скачать для Android<small data-android-summary>Универсальный APK · 55,14 МБ</small></span><svg class="end"><use href="#i-down"/></svg></a>
-        <a class="button ghost" data-windows href="/salom/SALOM-0.16.1-Release-Setup.exe" download><svg><use href="#i-desktop"/></svg><span>Скачать для Windows<small data-windows-summary>Setup.exe · 148,13 МБ</small></span><svg class="end"><use href="#i-down"/></svg></a>
+        <a class="button yellow" data-android-main href="/salom/salom-0.16.2.apk" download><svg><use href="#i-phone"/></svg><span>Скачать для Android<small data-android-summary>Универсальный APK</small></span><svg class="end"><use href="#i-down"/></svg></a>
+        <a class="button ghost" data-windows href="/salom/SALOM-0.16.2-Release-Setup.exe" download><svg><use href="#i-desktop"/></svg><span>Скачать для Windows<small data-windows-summary>Setup.exe</small></span><svg class="end"><use href="#i-down"/></svg></a>
       </div>
       <a class="sub-link" href="#install">Варианты APK и инструкция по установке <span aria-hidden="true">↓</span></a>
     </div>
@@ -86,7 +86,7 @@
     <div class="section-heading reveal"><h2 id="features-title">Что умеет Салом</h2><p>Найди собеседника по имени или @username и начни чат.</p></div>
     <div class="feature-grid">
       <article class="feature reveal"><svg><use href="#i-chat"/></svg><h3>Сообщения и реакции</h3><p>Отвечай на конкретные сообщения, редактируй свои и ставь реакции. Непрочитанные видны в списке чатов.</p></article>
-      <article class="feature reveal"><svg><use href="#i-call"/></svg><h3>Аудио и видео</h3><p>Звони из личного чата. На Android звонок открывается на весь экран, а свернуть его можно прямо в переписку.</p></article>
+      <article class="feature reveal"><svg><use href="#i-call"/></svg><h3>Аудио и видео</h3><p>Смотри видео собеседника на весь экран и перетаскивай своё окошко. При слабой сети Салом отдаёт приоритет звуку.</p></article>
       <article class="feature reveal"><svg><use href="#i-media"/></svg><h3>Медиа в переписке</h3><p>Отправляй фото, видео, документы и голосовые. Фотографии открываются из чата, голосовые проигрываются прямо в переписке.</p></article>
       <article class="feature reveal"><svg><use href="#i-star"/></svg><h3>Свой профиль</h3><p>Смени аватар, выбери оформление и проверь способ входа в настройках аккаунта.</p></article>
     </div>
@@ -98,24 +98,24 @@
         <div class="platform-title"><svg><use href="#i-phone"/></svg><h3>Android</h3></div>
         <p data-device-hint aria-live="polite">Если архитектура телефона неизвестна, подойдёт универсальный APK.</p>
         <div class="apk-grid">
-          <a data-abi="arm64-v8a" href="/salom/salom-0.16.1-arm64-v8a.apk" download><b>ARM64</b><small>19,28 МБ</small><svg><use href="#i-down"/></svg></a>
-          <a data-abi="armeabi-v7a" href="/salom/salom-0.16.1-armeabi-v7a.apk" download><b>ARM32</b><small>13,81 МБ</small><svg><use href="#i-down"/></svg></a>
-          <a data-abi="universal" href="/salom/salom-0.16.1.apk" download><b>Универсальный</b><small>55,14 МБ</small><svg><use href="#i-down"/></svg></a>
+          <a data-abi="arm64-v8a" href="/salom/salom-0.16.2-arm64-v8a.apk" download><b>ARM64</b><small></small><svg><use href="#i-down"/></svg></a>
+          <a data-abi="armeabi-v7a" href="/salom/salom-0.16.2-armeabi-v7a.apk" download><b>ARM32</b><small></small><svg><use href="#i-down"/></svg></a>
+          <a data-abi="universal" href="/salom/salom-0.16.2.apk" download><b>Универсальный</b><small></small><svg><use href="#i-down"/></svg></a>
         </div>
         <ol><li>Перед обновлением с 0.16.0 дождись отправки сообщений из очереди.</li><li>Открой «Настройки → Обновить приложение» в Саломе или скачай и открой APK.</li><li>Если Android запросит разрешение на установку или проверку Play Защитой, следуй подсказкам на экране.</li></ol>
       </article>
       <article class="install-card reveal">
         <div class="platform-title"><svg><use href="#i-desktop"/></svg><h3>Windows</h3></div>
         <p>Установщик для Windows 11 x64. Обычно права администратора не нужны.</p>
-        <a class="button dark" data-windows href="/salom/SALOM-0.16.1-Release-Setup.exe" download><svg><use href="#i-desktop"/></svg><span>Скачать Setup.exe<small data-windows-summary>Setup.exe · 148,13 МБ</small></span><svg class="end"><use href="#i-down"/></svg></a>
+        <a class="button dark" data-windows href="/salom/SALOM-0.16.2-Release-Setup.exe" download><svg><use href="#i-desktop"/></svg><span>Скачать Setup.exe<small data-windows-summary>Setup.exe</small></span><svg class="end"><use href="#i-down"/></svg></a>
         <ol><li>Запусти Setup.exe и нажми «Установить».</li><li>Открой Салом через ярлык на рабочем столе или в меню «Пуск».</li><li>Начиная с 0.16.1 для обновления нажми «Обновить» в окне Салома. С 0.16.0 один раз установи новую версию поверх текущей.</li></ol>
       </article>
     </div>
   </section>
   <section id="changes" class="shell section changes" aria-labelledby="changes-title">
     <div class="section-heading reveal"><h2 id="changes-title">Что нового</h2><p>Текущий выпуск</p></div>
-    <article class="release reveal"><div><time datetime="2026-11-24">24 ноября 2026</time><h3 data-version>0.16.1 Stability Core</h3><a href="https://github.com/mukimovmuhammad/chatter/releases">Все релизы на GitHub <span aria-hidden="true">↗</span></a></div>
-      <ul data-release-notes><li>Очередь сообщений и синхронизация устойчивее к обрывам сети и повторным событиям.</li><li>Исправлено завершение звонка при запоздалом событии. Двусторонний звук и видео ещё проверяются на устройствах.</li><li>Windows: кнопка «Обновить» и уведомления после закрытия окна. Фоновую доставку ещё проверяем.</li><li>Перед обновлением Android отправь сообщения из очереди 0.16.0. Старый общий кэш остаётся отдельно.</li></ul>
+    <article class="release reveal"><div><time datetime="2026-11-25">25 ноября 2026</time><h3 data-version>0.16.2 Video Calls</h3><a href="https://github.com/mukimovmuhammad/Salom-Messenger/releases">Все релизы на GitHub <span aria-hidden="true">↗</span></a></div>
+      <ul data-release-notes><li>Новый экран звонка на Android и Windows. Окно со своим видео можно перетаскивать.</li><li>Адаптивное видео с целью до 720p и 30 кадров в секунду при хорошей сети.</li><li>Если сеть оборвётся, Салом покажет «Восстанавливаем соединение…» и попробует вернуть звонок.</li><li>Проверка качества видео и восстановления связи на реальных сетях продолжается.</li></ul>
     </article>
   </section>
   <section id="help" class="shell section help" aria-labelledby="help-title">
@@ -127,7 +127,8 @@
         <details><summary>Код на email не пришёл</summary><p>Проверь написание адреса и папку «Спам». Код действует пять минут. Новый можно запросить через минуту.</p></details>
         <details><summary>Какой APK выбрать?</summary><p>ARM64 — для 64-битной системы ARM, ARM32 — для 32-битной. Если Android отклоняет выбранный пакет или архитектура неизвестна, скачай универсальный APK.</p></details>
         <details><summary>Почему Windows показывает предупреждение?</summary><p>У текущего Setup.exe нет подписи Windows. Скачивай его с этого сайта или из релиза GitHub. Размеры и контрольные суммы есть в <a href="/salom/version.json">манифесте версии</a>.</p></details>
-        <details><summary>Что делать, если не работает звонок?</summary><p>Разреши доступ к микрофону и камере для видео. На Windows для звонков нужен Microsoft Edge WebView2 Runtime. Если проблема повторяется, сообщи, на каких двух устройствах и версиях Салома ты её заметил.</p></details>
+        <details><summary>Что делать, если видео зависает?</summary><p>Если связь оборвётся, подожди, пока Салом попробует её восстановить. Если звонок не вернулся, попробуй другую сеть и сообщи в поддержку модели устройств и версию Салома.</p></details>
+        <details><summary>Почему камера или микрофон не работают?</summary><p>Разреши Салому доступ к микрофону и камере в настройках устройства. На Windows для звонков также нужен Microsoft Edge WebView2 Runtime.</p></details>
       </div>
       <aside class="support reveal"><svg><use href="#i-chat"/></svg><h3>Связаться с разработчиком</h3><p>Найди <b>@mukimovmuhammad</b> в поиске Салома или напиши на почту.</p><button type="button" data-copy="@mukimovmuhammad" hidden>Скопировать @username</button><a href="mailto:mukimovstudio@gmail.com">mukimovstudio@gmail.com</a><span class="copy-result" aria-live="polite"></span></aside>
     </div>

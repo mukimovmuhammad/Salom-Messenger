@@ -42,6 +42,11 @@ for abi, expected in release_input.get('androidVariants', {}).items():
     assert actual == expected, f'Uploaded APK checksum differs for {abi}'
     android_variants.append((abi, variant, actual))
 assert (incoming / 'index.html').is_file()
+page_contents = (incoming / 'index.html').read_text(encoding='utf-8')
+page_script = re.search(r'\bsrc="/(site-\d+\.js)"', page_contents)
+release_date = release_input.get('releaseDate')
+if release_date is not None:
+    assert datetime.date.fromisoformat(release_date).isoformat() == release_date
 config = Path('/etc/nginx/sites-available/salom-site.conf')
 page = Path('/var/www/salom-site/index.html')
 assert 'server_name mukimov.site;' in config.read_text()
@@ -100,6 +105,8 @@ for _, variant, _ in android_variants:
     temporary.replace(target / variant.name)
 metadata = {'version': version, 'displayName': display_name, 'versionCode': version_code, 'minSdk': min_sdk, 'downloadUrl': 'https://mukimov.site/salom/' + apk.name, 'size': apk.stat().st_size, 'sha256': sha256,
             'releaseNotes': release_notes}
+if release_date:
+    metadata['releaseDate'] = release_date
 if windows_file:
     metadata.update({'windowsFile': windows_file, 'windowsSize': windows_size, 'windowsSha256': windows_sha256})
 else:
@@ -116,11 +123,22 @@ for file in target.iterdir():
     if file.is_file(): file.chmod(0o644)
 try:
     subprocess.run(['nginx', '-t'], check=True)
+    if page_script:
+        asset = page.with_name(page_script[1])
+        source = incoming / page_script[1]
+        if source.is_file():
+            if asset.exists():
+                assert asset.read_bytes() == source.read_bytes(), 'Published versioned website asset is immutable'
+            else:
+                pending_asset = asset.with_suffix('.js.pending')
+                shutil.copy2(source, pending_asset)
+                pending_asset.chmod(0o644)
+                pending_asset.replace(asset)
+        assert asset.is_file(), 'Landing page JavaScript is missing'
     pending_page = page.with_suffix('.html.pending')
     shutil.copy2(incoming / 'index.html', pending_page)
     pending_page.chmod(0o644)
     pending_page.replace(page)
-    subprocess.run(['systemctl', 'reload', 'nginx'], check=True)
     # Advertise the release only after its immutable APK URL is live.
     temporary = target / 'version.json.tmp'
     temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n')

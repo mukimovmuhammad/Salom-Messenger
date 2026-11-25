@@ -156,7 +156,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         scope.launch {
             if (activeCall?.callId != call.callId) return@launch
             try {
-                val engine = CallEngine(context, call.callId, call.peerId, call.peerName, directory, scope, video) { state ->
+                val engine = CallEngine(context, call.callId, call.peerId, call.peerName, directory, scope, video, caller = !call.incoming) { state ->
                     if (activeCall?.callId == call.callId) {
                         if (state == "video_unavailable") {
                             callVideoEnabled = false
@@ -336,9 +336,10 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             if (call.action == "end") endCall("end")
         }
     }
-    LaunchedEffect(activeCall?.callId, activeCall?.state) {
+    val renewingCall = activeCall?.state in setOf("connected", "reconnecting")
+    LaunchedEffect(activeCall?.callId, renewingCall) {
         val call = activeCall ?: return@LaunchedEffect
-        if (call.state == "connected") {
+        if (renewingCall) {
             while (isActive) {
                 val state = try {
                     directory.updateCall(call.callId, "heartbeat").optString("state")
@@ -354,6 +355,9 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 delay(15_000)
             }
         }
+    }
+    LaunchedEffect(activeCall?.callId, activeCall?.state) {
+        val call = activeCall ?: return@LaunchedEffect
         val ringingTimeout = if (call.incoming) call.state == "incoming" else call.state == "ringing"
         val connectingTimeout = call.state in setOf("connecting", "reconnecting")
         if (ringingTimeout || connectingTimeout) {
@@ -1169,12 +1173,11 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     }
 
     if (call != null && (!minimizedCall || call.state == "incoming" || call.state == "failed")) key(call.callId) {
-        val status = callError ?: when (call.state) {
+        val status = if (call.state == "reconnecting") "Восстанавливаем соединение…" else callError ?: when (call.state) {
             "incoming" -> if (call.video) "Входящий видеозвонок" else "Входящий аудиозвонок"
             "ringing" -> "Вызов…"
             "connecting" -> "Подключение…"
             "connected" -> if (call.video) "Видеозвонок" else "Аудиозвонок"
-            "reconnecting" -> "Восстанавливаем связь…"
             "failed" -> "Связь не установлена"
             else -> "Звонок"
         }
@@ -1186,7 +1189,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             else -> "end"
         }
         CallScreen(
-            person.copy(name = call.peerName), status, callDuration, wallpaperId, engine,
+            person.copy(name = call.peerName), status, callDuration, engine,
             showVideo = engineReady && call.video && engine != null,
             muted = callMuted, speaker = callSpeaker, camera = callVideoEnabled,
             actions = CallScreenActions(
@@ -1198,6 +1201,9 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 speaker = engine?.let { { callSpeaker = !callSpeaker; it.setSpeaker(callSpeaker) } },
                 camera = engine?.takeIf { it.hasLocalVideo }?.let {
                     { callVideoEnabled = !callVideoEnabled; it.setVideoEnabled(callVideoEnabled) }
+                },
+                switchCamera = engine?.takeIf { it.canSwitchCamera }?.let {
+                    { it.switchCamera { callError = "Не удалось переключить камеру" } }
                 }
             )
         )
@@ -1343,6 +1349,17 @@ internal fun ChatGlyph(kind: String, color: Color) {
     Canvas(Modifier.size(21.dp)) {
         val w = size.width; val h = size.height; val line = w * .075f
         when (kind) {
+            "switch_camera" -> {
+                drawRoundRect(color, Offset(w * .10f, h * .28f), Size(w * .80f, h * .52f),
+                    androidx.compose.ui.geometry.CornerRadius(w * .10f), style = Stroke(line))
+                drawPath(Path().apply {
+                    moveTo(w*.31f,h*.27f); lineTo(w*.40f,h*.15f); lineTo(w*.60f,h*.15f); lineTo(w*.69f,h*.27f)
+                    moveTo(w*.67f,h*.47f); lineTo(w*.70f,h*.61f); lineTo(w*.55f,h*.59f)
+                    moveTo(w*.33f,h*.64f); lineTo(w*.30f,h*.50f); lineTo(w*.45f,h*.52f)
+                }, color, style = Stroke(line))
+                drawArc(color, 195f, 130f, false, Offset(w*.33f,h*.39f), Size(w*.34f,h*.32f), style = Stroke(line))
+                drawArc(color, 15f, 130f, false, Offset(w*.33f,h*.39f), Size(w*.34f,h*.32f), style = Stroke(line))
+            }
             "video" -> {
                 drawRoundRect(color, Offset(w * .08f, h * .24f), Size(w * .57f, h * .52f),
                     androidx.compose.ui.geometry.CornerRadius(w * .10f), style = Stroke(line))
