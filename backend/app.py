@@ -111,6 +111,7 @@ def initialize():
         }
         with connect() as db:
             media.avatar_schema(db)
+            db.execute(media.ALBUM_SCHEMA)
             # Additive call schema; safe to apply on existing PostgreSQL installs.
             db.executescript('''CREATE TABLE IF NOT EXISTS email_identities (profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE);CREATE TABLE IF NOT EXISTS call_sessions (
               id TEXT PRIMARY KEY, caller_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -195,6 +196,7 @@ def initialize():
           CREATE INDEX IF NOT EXISTS email_challenges_email ON email_challenges(email,created);
         ''')
         media.schema(db)
+        db.execute(media.ALBUM_SCHEMA)
         db.execute(REACTION_SCHEMA)
         if 'media_mode' not in {row[1] for row in db.execute('PRAGMA table_info(call_sessions)')}:
             db.execute("ALTER TABLE call_sessions ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'audio'")
@@ -485,7 +487,10 @@ def message_json(row, db, reaction_batch=None):
         if ref:
             preview = ref['text'] or ('Фото' if ref['kind'] == 'image' else 'Видео' if ref['kind'] == 'video' else 'Голосовое сообщение' if ref['kind'] == 'voice' else ref['name'] or 'Вложение')
             reply = {'id': ref['id'], 'sender_id': ref['sender_id'], 'text': preview[:300]}
-    return {**{key: row[key] for key in ('id', 'sender_id', 'recipient_id', 'client_id', 'text', 'created')}, 'edited_at': row['edited_at'], 'receipt': receipt, 'attachment': media.metadata(db, row['attachment_id']), 'reply_to': reply, 'location_id': row['location_id'], 'reactions': {'sender': reactions.get(row['sender_id']), 'recipient': reactions.get(row['recipient_id'])}}
+    attachment = media.metadata(db, row['attachment_id'])
+    extras = media.album_extras(db, row['id']) if attachment else []
+    album = {'album': [attachment, *(media.metadata(db, photo) for photo in extras)]} if extras else {}
+    return {**album, **{key: row[key] for key in ('id', 'sender_id', 'recipient_id', 'client_id', 'text', 'created')}, 'edited_at': row['edited_at'], 'receipt': receipt, 'attachment': attachment, 'reply_to': reply, 'location_id': row['location_id'], 'reactions': {'sender': reactions.get(row['sender_id']), 'recipient': reactions.get(row['recipient_id'])}}
 
 class LiveLocationInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -630,15 +635,19 @@ def delete_message(message_id: int, scope: str = Query(default='me', pattern='^(
         if scope == 'everyone':
             if sender != me['id']: raise HTTPException(403, 'Удалить у всех может только автор сообщения')
             db.execute('INSERT INTO message_events(message_id,sender_id,recipient_id,kind) VALUES(?,?,?,\'delete\')', (message_id,sender,recipient))
-            attachment_id = row['attachment_id']
+            attachment_ids = [row['attachment_id'], *media.album_extras(db, message_id)] if row['attachment_id'] else []
             db.execute('DELETE FROM messages WHERE id=?', (message_id,))
-            if attachment_id:
+            for attachment_id in attachment_ids:
                 db.execute('DELETE FROM attachments WHERE id=?', (attachment_id,))
-                media.ROOT.joinpath(attachment_id).unlink(missing_ok=True)
         else:
             db.execute('INSERT OR IGNORE INTO message_hides(owner_id,message_id) VALUES(?,?)', (me['id'],message_id))
             db.execute('INSERT INTO message_events(message_id,sender_id,recipient_id,owner_id,kind) VALUES(?,?,?,?,\'hide\')', (message_id,sender,recipient,me['id']))
     if scope == 'everyone':
+        for attachment_id in attachment_ids:
+            try:
+                media.ROOT.joinpath(attachment_id).unlink(missing_ok=True)
+            except OSError:
+                logging.getLogger('uvicorn.error').warning('Failed to remove a deleted attachment')
         publish_realtime(recipient, {'type': 'sync', 'peer_id': sender})
         publish_realtime(sender, {'type': 'sync', 'peer_id': recipient})
     else:
@@ -653,6 +662,7 @@ class MessageInput(BaseModel):
     text: str = Field(default='', max_length=4000)
     attachment_id: str | None = Field(default=None, min_length=36, max_length=36)
     reply_to_id: int | None = Field(default=None, ge=1)
+    album_ids: list[UUID] | None = Field(default=None, min_length=2, max_length=12)
 
 @app.post('/messages')
 def send_message(body: MessageInput, authorization: str | None = Header(default=None)):
@@ -663,14 +673,19 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
         UUID(body.client_id)
     except ValueError: raise HTTPException(400, 'Неверный идентификатор сообщения или получателя')
     text = body.text.strip()
-    if not text and not body.attachment_id: raise HTTPException(400, 'Сообщение не может быть пустым')
+    album = [str(photo) for photo in body.album_ids or []]
+    if album and (body.attachment_id or len(set(album)) != len(album)):
+        raise HTTPException(400, 'Альбом должен содержать разные фотографии')
+    attachment_ids = album or ([body.attachment_id] if body.attachment_id else [])
+    primary = attachment_ids[0] if attachment_ids else None
+    if not text and primary is None: raise HTTPException(400, 'Сообщение не может быть пустым')
     if body.recipient_id == me['id']: raise HTTPException(400, 'Для личных заметок используй Избранное')
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         media.lock_sender(db, me['id'])
         existing = db.execute('SELECT * FROM messages WHERE sender_id=? AND client_id=?', (me['id'], body.client_id)).fetchone()
         if existing:
-            if existing['recipient_id'] != body.recipient_id or existing['text'] != text or existing['attachment_id'] != body.attachment_id or existing['reply_to_id'] != body.reply_to_id:
+            if existing['recipient_id'] != body.recipient_id or existing['text'] != text or existing['attachment_id'] != primary or existing['reply_to_id'] != body.reply_to_id or media.album_extras(db, existing['id']) != album[1:]:
                 raise HTTPException(409, 'Этот идентификатор уже использован для другого сообщения')
             return message_json(existing, db)
         # A retry acknowledges an existing row even when the new-message quota is exhausted.
@@ -683,11 +698,19 @@ def send_message(body: MessageInput, authorization: str | None = Header(default=
               ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))''',
               (cleared, body.reply_to_id, me['id'], body.recipient_id, body.recipient_id, me['id'])).fetchone()
             if not reference: raise HTTPException(400, 'Сообщение для ответа недоступно')
-        if body.attachment_id:
-            attachment = db.execute('SELECT * FROM attachments WHERE id=? AND owner_id=? AND peer_id=? AND ready=1', (body.attachment_id, me['id'], body.recipient_id)).fetchone()
-            if not attachment: raise HTTPException(400, 'Вложение недоступно')
-            if db.execute('SELECT 1 FROM messages WHERE attachment_id=?', (body.attachment_id,)).fetchone(): raise HTTPException(409, 'Вложение уже отправлено')
-        cursor = db.execute('INSERT INTO messages(sender_id,recipient_id,client_id,text,created,attachment_id,reply_to_id) VALUES(?,?,?,?,?,?,?)', (me['id'], body.recipient_id, body.client_id, text, time.time(), body.attachment_id, body.reply_to_id))
+        for attachment_id in attachment_ids:
+            attachment = db.execute('SELECT mime FROM attachments WHERE id=? AND owner_id=? AND peer_id=? AND ready=1', (attachment_id, me['id'], body.recipient_id)).fetchone()
+            if not attachment:
+                raise HTTPException(400, 'Вложение недоступно')
+            if album and attachment['mime'] not in ('image/jpeg', 'image/png', 'image/webp', 'image/gif'):
+                raise HTTPException(400, 'В альбом можно добавить только фотографии')
+            if media.attachment_message(db, attachment_id):
+                raise HTTPException(409, 'Вложение уже отправлено')
+        cursor = db.execute('INSERT INTO messages(sender_id,recipient_id,client_id,text,created,attachment_id,reply_to_id) VALUES(?,?,?,?,?,?,?)', (me['id'], body.recipient_id, body.client_id, text, time.time(), primary, body.reply_to_id))
+        message_id = cursor.lastrowid
+        for position, attachment_id in enumerate(album[1:], start=1):
+            db.execute('INSERT INTO message_album_photos(message_id,position,attachment_id) VALUES(?,?,?)',
+                       (message_id, position, attachment_id))
         db.execute('INSERT INTO push_jobs(message_id) VALUES(?)', (cursor.lastrowid,))
         outgoing = message_json(db.execute('SELECT * FROM messages WHERE id=?', (cursor.lastrowid,)).fetchone(), db)
     committed = time.perf_counter()

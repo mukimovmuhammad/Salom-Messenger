@@ -35,6 +35,7 @@ internal sealed class LocalChatStore
         if (!names.Contains("edited")) { migration.CommandText = "ALTER TABLE messages ADD COLUMN edited INTEGER NOT NULL DEFAULT 0"; migration.ExecuteNonQuery(); }
         if (!names.Contains("my_reaction")) { migration.CommandText = "ALTER TABLE messages ADD COLUMN my_reaction TEXT"; migration.ExecuteNonQuery(); }
         if (!names.Contains("peer_reaction")) { migration.CommandText = "ALTER TABLE messages ADD COLUMN peer_reaction TEXT"; migration.ExecuteNonQuery(); }
+        if (!names.Contains("album_json")) { migration.CommandText = "ALTER TABLE messages ADD COLUMN album_json TEXT"; migration.ExecuteNonQuery(); }
         migration.CommandText = "CREATE TABLE IF NOT EXISTS outbox(scope TEXT NOT NULL,id TEXT NOT NULL,peer TEXT NOT NULL,created TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(scope,id)); CREATE TABLE IF NOT EXISTS history_cursor(peer TEXT PRIMARY KEY,message_cursor INTEGER NOT NULL,event_cursor INTEGER NOT NULL,cleared_through INTEGER NOT NULL)";
         migration.ExecuteNonQuery();
     }
@@ -103,13 +104,14 @@ internal sealed class LocalChatStore
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "SELECT id,text,mine,created,attachment_id,attachment_name,attachment_mime,reply_text,reply_mine,voice_json,reply_id,edited,my_reaction,peer_reaction FROM messages WHERE peer_id=$peer ORDER BY created,id";
+        command.CommandText = "SELECT id,text,mine,created,attachment_id,attachment_name,attachment_mime,reply_text,reply_mine,voice_json,reply_id,edited,my_reaction,peer_reaction,album_json FROM messages WHERE peer_id=$peer ORDER BY created,id";
         command.Parameters.AddWithValue("$peer", ScopedPeer(scope, peerId));
         using var reader = command.ExecuteReader();
         var result = new List<ChatMessage>();
         while (reader.Read()) result.Add(new ChatMessage(reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2) == 1, DateTime.Parse(reader.GetString(3)).ToLocalTime(), reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetInt64(8) == 1, ReadVoice(reader.IsDBNull(9) ? null : reader.GetString(9)),
             replyId: reader.IsDBNull(10) ? null : reader.GetInt64(10), edited: reader.GetInt64(11) == 1,
-            myReaction: reader.IsDBNull(12) ? null : reader.GetString(12), peerReaction: reader.IsDBNull(13) ? null : reader.GetString(13)));
+            myReaction: reader.IsDBNull(12) ? null : reader.GetString(12), peerReaction: reader.IsDBNull(13) ? null : reader.GetString(13),
+            album: reader.IsDBNull(14) ? null : JsonSerializer.Deserialize<AlbumPhoto[]>(reader.GetString(14))));
         return result;
     }
 
@@ -121,7 +123,7 @@ internal sealed class LocalChatStore
         {
             using var command = db.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "INSERT INTO messages(peer_id,id,text,mine,created,attachment_id,attachment_name,attachment_mime,reply_text,reply_mine,voice_json,reply_id,edited,my_reaction,peer_reaction) VALUES($peer,$id,$text,$mine,$created,$attachment,$attachmentName,$attachmentMime,$replyText,$replyMine,$voice,$replyId,$edited,$myReaction,$peerReaction) ON CONFLICT(peer_id,id) DO UPDATE SET text=excluded.text,mine=excluded.mine,created=excluded.created,attachment_id=excluded.attachment_id,attachment_name=excluded.attachment_name,attachment_mime=excluded.attachment_mime,reply_text=excluded.reply_text,reply_mine=excluded.reply_mine,voice_json=excluded.voice_json,reply_id=excluded.reply_id,edited=excluded.edited,my_reaction=excluded.my_reaction,peer_reaction=excluded.peer_reaction";
+            command.CommandText = "INSERT INTO messages(peer_id,id,text,mine,created,attachment_id,attachment_name,attachment_mime,reply_text,reply_mine,voice_json,reply_id,edited,my_reaction,peer_reaction,album_json) VALUES($peer,$id,$text,$mine,$created,$attachment,$attachmentName,$attachmentMime,$replyText,$replyMine,$voice,$replyId,$edited,$myReaction,$peerReaction,$album) ON CONFLICT(peer_id,id) DO UPDATE SET text=excluded.text,mine=excluded.mine,created=excluded.created,attachment_id=excluded.attachment_id,attachment_name=excluded.attachment_name,attachment_mime=excluded.attachment_mime,reply_text=excluded.reply_text,reply_mine=excluded.reply_mine,voice_json=excluded.voice_json,reply_id=excluded.reply_id,edited=excluded.edited,my_reaction=excluded.my_reaction,peer_reaction=excluded.peer_reaction,album_json=excluded.album_json";
             command.Parameters.AddWithValue("$peer", ScopedPeer(scope, peerId));
             command.Parameters.AddWithValue("$id", message.Id);
             command.Parameters.AddWithValue("$text", message.Text);
@@ -137,6 +139,7 @@ internal sealed class LocalChatStore
             command.Parameters.AddWithValue("$edited", message.Edited ? 1 : 0);
             command.Parameters.AddWithValue("$myReaction", (object?)message.MyReaction ?? DBNull.Value);
             command.Parameters.AddWithValue("$peerReaction", (object?)message.PeerReaction ?? DBNull.Value);
+            command.Parameters.AddWithValue("$album", message.HasAlbum ? JsonSerializer.Serialize(message.Album) : DBNull.Value);
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -174,4 +177,4 @@ internal sealed class LocalChatStore
 }
 
 internal sealed record DesktopOutgoing(Guid Id, ChatItem Peer, string Text, long? ReplyId, DateTime Created,
-    string? AudioPath = null, VoiceClip? Voice = null, string? PhotoPath = null);
+    string? AudioPath = null, VoiceClip? Voice = null, string? PhotoPath = null, string[]? PhotoPaths = null);

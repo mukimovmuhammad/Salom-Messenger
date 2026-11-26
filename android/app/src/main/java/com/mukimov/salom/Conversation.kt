@@ -403,7 +403,13 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 uploadingId = item.clientId
                 try {
                     coroutineScope {
-                        val upload = async { media.upload(person.id, attachment) { uploadProgress = it } }
+                        val upload = async {
+                            val photos = attachment.photos
+                            val uploadedPhotos = photos.mapIndexed { index, photo ->
+                                media.upload(person.id, photo) { uploadProgress = (index + it) / photos.size }
+                            }
+                            uploadedPhotos.first().copy(extraPhotos = uploadedPhotos.drop(1))
+                        }
                         transferJob = upload
                         upload.await()
                     }
@@ -418,7 +424,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             messages = (messages + sent).filter { it.remoteId > clearedThrough }.distinctBy { it.remoteId }.sortedBy { it.remoteId }
             attachment?.let { media.removeLocal(it) }
             sendError = null
-            sent.attachment?.let { photo ->
+            sent.attachment?.photos.orEmpty().forEach { photo ->
                 try { media.autoSaveOwnPhoto(photo) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { android.util.Log.w("SalomPhotos", "Could not save outgoing photo", failure) }
@@ -553,7 +559,43 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         }
     }
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), choose)
-    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), choose)
+    val pickVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), choose)
+    val choosePhotos: (List<android.net.Uri>) -> Unit = { uris ->
+        if (uris.isNotEmpty()) {
+            val previous = selected?.takeIf { it.isAlbumPhoto }?.photos.orEmpty()
+            val remaining = 12 - previous.size
+            sendError = if (uris.size > remaining) "В альбоме может быть до 12 фото" else null
+            if (remaining > 0) {
+                preparing = true
+                scope.launch {
+                    val prepared = mutableListOf<Attachment>()
+                    var attached = false
+                    try {
+                        for (uri in uris.take(remaining)) {
+                            val photo = media.prepare(uri, durable = true)
+                            prepared += photo
+                            if (!photo.isAlbumPhoto) throw DirectoryException("Для альбома выбери фото JPG, PNG, WebP или GIF")
+                        }
+                        if (previous.isEmpty()) selected?.let { media.removeLocal(it) }
+                        val photos = previous + prepared
+                        selected = photos.first().copy(extraPhotos = photos.drop(1))
+                        uploaded = null
+                        attached = true
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) {
+                        sendError = (failure as? DirectoryException)?.message ?: "Не удалось открыть фотографии"
+                    } finally {
+                        if (!attached) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            prepared.forEach { media.removeLocal(it) }
+                        }
+                        preparing = false
+                    }
+                }
+            }
+        }
+    }
+
+    val pickPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(12), choosePhotos)
 
     fun openLocationMap(id:String) {
         scope.launch {
@@ -953,7 +995,25 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         }
 
         selected?.let { attachment ->
-            Row(Modifier.padding(horizontal=8.dp,vertical=3.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(chatSurface).padding(start=7.dp,top=5.dp,bottom=5.dp), verticalAlignment=Alignment.CenterVertically) {
+            if (attachment.extraPhotos.isNotEmpty()) {
+                Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp).fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    attachment.photos.forEach { photo ->
+                        key(photo.id) {
+                            Box {
+                                SelectedAttachmentPreview(photo, media)
+                                Box(Modifier.align(Alignment.TopEnd).background(chatSurface.copy(alpha = .9f), CircleShape)) {
+                                    ChatAction("close", "Убрать фото", enabled = !busy) {
+                                        val kept = attachment.photos.filterNot { it.id == photo.id }
+                                        selected = kept.first().copy(extraPhotos = kept.drop(1))
+                                        scope.launch { media.removeLocal(photo) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else Row(Modifier.padding(horizontal=8.dp,vertical=3.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(chatSurface).padding(start=7.dp,top=5.dp,bottom=5.dp), verticalAlignment=Alignment.CenterVertically) {
                 if (attachment.kind == "voice") Box(Modifier.weight(1f)) { AudioBubble(attachment,audio,if (dark) Color(0xFFE1E8ED) else Ink) }
                 else {
                     if (attachment.mime.startsWith("image/")) SelectedAttachmentPreview(attachment, media)
@@ -1110,11 +1170,12 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
 
     if (attachmentsMenu) AttachmentSheet(
         onDismiss = { attachmentsMenu = false },
-        onPhoto = { attachmentsMenu = false; choose(it) },
+        onPhoto = { attachmentsMenu = false; choosePhotos(listOf(it)) },
         openPicker = {
             attachmentsMenu = false
-            pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+            pickPhotos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
+        openVideos = { attachmentsMenu = false; pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
         openFiles = { attachmentsMenu = false; pickFile.launch(arrayOf("*/*")) },
         openLocation = { attachmentsMenu = false; showLocationOptions = true }
     )

@@ -14,10 +14,14 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-internal data class Attachment(val id: String, val name: String, val mime: String, val size: Long, val local: Boolean = false, val kind: String = "file", val durationMs: Long = 0, val waveform: List<Int> = emptyList()) {
-    fun json() = JSONObject().put("id", id).put("name", name).put("mime", mime).put("size", size).put("local", local).put("kind", kind).put("duration_ms", durationMs).put("waveform", org.json.JSONArray(waveform))
+internal data class Attachment(val id: String, val name: String, val mime: String, val size: Long, val local: Boolean = false, val kind: String = "file", val durationMs: Long = 0, val waveform: List<Int> = emptyList(), val extraPhotos: List<Attachment> = emptyList()) {
+    val photos get() = listOf(copy(extraPhotos = emptyList())) + extraPhotos
+    val isAlbumPhoto get() = mime in setOf("image/jpeg", "image/png", "image/webp", "image/gif")
+    fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("mime", mime).put("size", size).put("local", local).put("kind", kind).put("duration_ms", durationMs).put("waveform", org.json.JSONArray(waveform))
+        .apply { if (extraPhotos.isNotEmpty()) put("album", org.json.JSONArray(extraPhotos.map { it.json() })) }
     companion object {
-        fun from(json: JSONObject) = Attachment(json.getString("id"), json.getString("name"), json.getString("mime"), json.getLong("size"), json.optBoolean("local"), json.optString("kind", "file"), json.optLong("duration_ms"), json.optJSONArray("waveform")?.let { array -> (0 until array.length()).map { array.optInt(it).coerceIn(0, 100) }.take(32) }.orEmpty())
+        fun from(json: JSONObject): Attachment = Attachment(json.getString("id"), json.getString("name"), json.getString("mime"), json.getLong("size"), json.optBoolean("local"), json.optString("kind", "file"), json.optLong("duration_ms"), json.optJSONArray("waveform")?.let { array -> (0 until array.length()).map { array.optInt(it).coerceIn(0, 100) }.take(32) }.orEmpty(), parsePhotos(json.optJSONArray("album")))
+        fun parsePhotos(array: org.json.JSONArray?): List<Attachment> = array?.let { (0 until minOf(it.length(), 12)).mapNotNull { index -> it.optJSONObject(index)?.let(::from) } }.orEmpty()
     }
 }
 internal class MediaFiles(private val context: Context, private val directory: DirectoryClient) {
@@ -51,14 +55,14 @@ internal class MediaFiles(private val context: Context, private val directory: D
             if (old.delete()) total -= size
         }
     }
-    suspend fun prepare(uri: Uri): Attachment = withContext(Dispatchers.IO) {
+    suspend fun prepare(uri: Uri, durable: Boolean = false): Attachment = withContext(Dispatchers.IO) {
         var name = "Файл"
         var declared = -1L
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use {
             if (it.moveToFirst()) { name = it.getString(0).orEmpty().take(180).ifBlank { "Файл" }; if (!it.isNull(1)) declared = it.getLong(1) }
         }
         if (declared > MAX_FILE) throw DirectoryException("Максимальный размер файла — 25 МБ")
-        val initial = Attachment(UUID.randomUUID().toString(), name, context.contentResolver.getType(uri) ?: "application/octet-stream", 0)
+        val initial = Attachment(UUID.randomUUID().toString(), name, context.contentResolver.getType(uri) ?: "application/octet-stream", 0, local = durable)
         val file = target(initial)
         try {
             val input = context.contentResolver.openInputStream(uri) ?: throw DirectoryException("Не удалось открыть файл")
@@ -71,7 +75,7 @@ internal class MediaFiles(private val context: Context, private val directory: D
                 }
             } }
             if (size == 0L) throw DirectoryException("Файл пустой")
-            trimCache(file)
+            if (!durable) trimCache(file)
             initial.copy(size = size)
         } catch (failure: Exception) { file.delete(); throw failure }
     }
@@ -80,17 +84,17 @@ internal class MediaFiles(private val context: Context, private val directory: D
         target(attachment).copyTo(target(result), overwrite = true)
         result
     }
-    suspend fun saveLocal(attachment: Attachment): Attachment = withContext(Dispatchers.IO) {
-        val result = attachment.copy(local = true)
-        target(attachment).copyTo(target(result), overwrite = true)
-        result
-    }
+    suspend fun saveLocal(attachment: Attachment): Attachment = persistForQueue(attachment)
+
     suspend fun persistForQueue(attachment: Attachment): Attachment = withContext(Dispatchers.IO) {
-        val result = attachment.copy(local = true)
-        val source = target(attachment)
-        if (!source.isFile) throw DirectoryException("Файл вложения уже недоступен")
-        source.copyTo(target(result), overwrite = true)
-        result
+        val photos = attachment.photos.map { photo ->
+            val result = photo.copy(local = true)
+            val source = target(photo)
+            if (!source.isFile) throw DirectoryException("Файл вложения уже недоступен")
+            if (!photo.local) source.copyTo(target(result), overwrite = true)
+            result
+        }
+        photos.first().copy(extraPhotos = photos.drop(1))
     }
     suspend fun file(attachment: Attachment, progress: (Float) -> Unit = {}): File = withContext(Dispatchers.IO) {
         lock.withLock {
@@ -111,7 +115,7 @@ internal class MediaFiles(private val context: Context, private val directory: D
         while (bounds.outWidth / sample > maximumEdge || bounds.outHeight / sample > maximumEdge) sample *= 2
         BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
-    suspend fun removeLocal(attachment: Attachment) = withContext(Dispatchers.IO) { target(attachment).delete(); Unit }
+    suspend fun removeLocal(attachment: Attachment) = withContext(Dispatchers.IO) { attachment.photos.forEach { target(it).delete() }; Unit }
     suspend fun open(attachment: Attachment, progress: (Float) -> Unit = {}) {
         val file = file(attachment, progress)
         val uri = FileProvider.getUriForFile(context, "com.mukimov.salom.updates", file)

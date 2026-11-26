@@ -55,6 +55,43 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.send(attachment).status_code,409)
         self.assertEqual(self.send(attachment,client_id=key,text='different').status_code,409)
 
+    def test_album_is_one_message_with_ordered_private_photos(self):
+        photo_bytes = b'\x89PNG\r\n\x1a\n'
+        photos = [self.upload(photo_bytes + bytes([i]), name=f'{i}.png', mime='image/png').json()
+                  for i in range(12)]
+        ids = [photo['id'] for photo in photos]
+        body = {'recipient_id': self.ids[1], 'client_id': str(uuid.uuid4()), 'album_ids': ids}
+        def send(**changes):
+            return self.client.post('/messages', json={**body, **changes}, headers=self.headers())
+        self.assertEqual(send(album_ids=ids + [str(uuid.uuid4())]).status_code, 422)
+        self.assertEqual(send(album_ids=[ids[0], ids[0]]).status_code, 400)
+        document = self.upload().json()
+        self.assertEqual(send(album_ids=[ids[0], document['id']]).status_code, 400)
+        self.assertEqual(self.download(photos[-1], 1).status_code, 404)
+        first = send()
+        self.assertEqual(first.status_code, 200, first.text)
+        album = first.json()
+        self.assertEqual(send().json()['id'], album['id'])
+        self.assertEqual(send(album_ids=ids[::-1]).status_code, 409)
+        self.assertEqual(self.send(photos[-1]).status_code, 409)
+        self.assertEqual(album['attachment'], photos[0])
+        self.assertEqual(album['album'], photos)
+        self.assertEqual(self.history(1, 0)['messages'][0]['album'], photos)
+        self.assertEqual(len(self.history(1, 0)['messages']), 1)
+        self.assertEqual(self.download(photos[-1], 1).content, photo_bytes + bytes([11]))
+        self.assertEqual(self.download(photos[-1], 2).status_code, 404)
+        with app.connect() as db:
+            db.execute('UPDATE attachments SET created=0')
+        self.assertEqual(self.upload().status_code, 200)
+        self.assertEqual(self.download(photos[-1], 1).status_code, 200)
+        route = f"/messages/{album['id']}"
+        self.assertEqual(self.client.delete(route, headers=self.headers(1)).status_code, 200)
+        self.assertEqual(self.download(photos[-1], 1).status_code, 404)
+        self.assertEqual(self.download(photos[-1], 0).status_code, 200)
+        self.assertEqual(self.client.delete(route + '?scope=everyone', headers=self.headers()).status_code, 200)
+        self.assertEqual(self.download(photos[-1], 0).status_code, 404)
+        self.assertFalse((media.ROOT / ids[-1]).exists())
+
     def test_wrong_owner_or_recipient_cannot_send_uploaded_file(self):
         attachment=self.upload().json()
         self.assertEqual(self.send(attachment,sender=2,peer=1).status_code,400)

@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     private ChatMessage? _editingMessage;
     private bool _savingEdit;
     private bool _savingClipboardPhoto;
-    private BitmapSource? _clipboardPhoto;
+    private readonly List<BitmapSource> _clipboardPhotos = [];
     private bool _historyAction;
     private bool _searchPlaceholder = true;
     private bool _peerOnline;
@@ -562,9 +562,9 @@ public partial class MainWindow : Window
     {
         if (_activeChat is not { } chat || PhotoCacheScope is not { } scope) { ShowToast("Сначала выбери чат"); return; }
         var text = MessageBox.Text.Trim();
-        if (_clipboardPhoto is { } photo)
+        if (_clipboardPhotos.Count > 0)
         {
-            await QueueClipboardPhotoAsync(chat, scope, photo, text);
+            await QueueClipboardPhotosAsync(chat, scope, _clipboardPhotos.ToArray(), text);
             return;
         }
         if (text.Length == 0) return;
@@ -643,9 +643,28 @@ public partial class MainWindow : Window
 
     private void SetClipboardPhoto(BitmapSource? photo)
     {
-        _clipboardPhoto = photo;
-        ClipboardPhotoImage.Source = photo;
-        ClipboardPhotoBanner.Visibility = photo == null ? Visibility.Collapsed : Visibility.Visible;
+        if (photo == null) _clipboardPhotos.Clear();
+        else if (_savingClipboardPhoto) return;
+        else if (_clipboardPhotos.Count == 12) { ShowToast("В альбом можно добавить до 12 фото."); return; }
+        else _clipboardPhotos.Add(photo);
+        RefreshClipboardPhotos();
+    }
+
+    private void RefreshClipboardPhotos()
+    {
+        ClipboardPhotoList.ItemsSource = _clipboardPhotos.ToArray();
+        ClipboardPhotoCount.Text = $"Фото: {_clipboardPhotos.Count} из 12";
+        ClipboardPhotoBanner.Visibility = _clipboardPhotos.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void RemoveOneClipboardPhoto_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_savingClipboardPhoto && sender is System.Windows.Controls.Button { DataContext: BitmapSource photo })
+        {
+            _clipboardPhotos.Remove(photo);
+            RefreshClipboardPhotos();
+        }
+        MessageBox.Focus();
     }
 
     private void RemoveClipboardPhoto_Click(object sender, RoutedEventArgs e)
@@ -654,21 +673,25 @@ public partial class MainWindow : Window
         MessageBox.Focus();
     }
 
-    private async Task QueueClipboardPhotoAsync(ChatItem chat, string scope, BitmapSource photo, string caption)
+    private async Task QueueClipboardPhotosAsync(ChatItem chat, string scope, BitmapSource[] photos, string caption)
     {
         if (_savingClipboardPhoto) return;
         _savingClipboardPhoto = true;
         var reply = _replyTo;
         var id = Guid.NewGuid();
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SALOM", "PhotoOutbox");
-        string? path = null;
+        var paths = new List<string>(photos.Length);
         try
         {
-            path = await Task.Run(() => ClipboardPhoto.Save(photo, folder, id));
+            await Task.Run(() =>
+            {
+                foreach (var photo in photos) paths.Add(ClipboardPhoto.Save(photo, folder, Guid.NewGuid()));
+            });
             if (PhotoCacheScope != scope || _realtimeCancellation?.IsCancellationRequested != false) return;
-            QueueOutgoing(new(id, chat, caption, reply?.Id, DateTime.Now, PhotoPath: path));
-            path = null;
-            if (_activeChat?.Id == chat.Id && ReferenceEquals(_clipboardPhoto, photo))
+            QueueOutgoing(new(id, chat, caption, reply?.Id, DateTime.Now,
+                PhotoPath: paths.Count == 1 ? paths[0] : null, PhotoPaths: paths.Count > 1 ? paths.ToArray() : null));
+            paths.Clear();
+            if (_activeChat?.Id == chat.Id && _clipboardPhotos.SequenceEqual(photos))
             {
                 SetClipboardPhoto(null);
                 if (MessageBox.Text.Trim() == caption) MessageBox.Clear();
@@ -682,7 +705,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (path != null) TryDeleteRecording(path);
+            foreach (var path in paths) TryDeleteRecording(path);
             _savingClipboardPhoto = false;
         }
     }
@@ -705,7 +728,7 @@ public partial class MainWindow : Window
         if (_messages.Any(message => message.Id > 0 && message.IsMine && message.ClientId == item.Id)) return;
         var previous = _messages.FirstOrDefault(message => message.Id == 0 && message.ClientId == item.Id);
         var label = item.Voice != null ? "Голосовое сообщение"
-            : item.PhotoPath != null && item.Text.Length == 0 ? "Фото" : item.Text;
+            : (item.PhotoPath != null || item.PhotoPaths != null) && item.Text.Length == 0 ? "Фото" : item.Text;
         var pending = new ChatMessage(0, label, true, item.Created,
             clientId: item.Id) { PendingStatus = status };
         if (previous == null) _messages.Add(pending);
@@ -729,7 +752,10 @@ public partial class MainWindow : Window
                 try
                 {
                     var path = item.PhotoPath ?? item.AudioPath;
-                    var sent = path == null
+                    var sent = item.PhotoPaths is { Length: > 1 } photos
+                        ? await _client.SendPhotoAlbumAsync(item.Peer, photos, item.Text, item.Id,
+                            new Progress<int>(value => ShowOutgoing(item, $"Отправляется · {value}%")), token, item.ReplyId)
+                        : path == null
                         ? await _client.SendTextAsync(item.Peer.Id, item.Text, item.Id, item.ReplyId, token)
                         : await _client.SendAttachmentAsync(item.Peer, path, item.Text, item.Id,
                             new Progress<int>(), token, item.ReplyId, item.Voice);
@@ -737,6 +763,7 @@ public partial class MainWindow : Window
                     _store.Save(scope, item.Peer.Id, new[] { sent });
                     _store.RemoveOutgoing(scope, item.Id);
                     if (path != null) TryDeleteRecording(path);
+                    if (item.PhotoPaths != null) foreach (var photo in item.PhotoPaths) TryDeleteRecording(photo);
                     if (PhotoCacheScope == scope && _activeChat?.Id == item.Peer.Id)
                     {
                         AddVisibleMessage(sent);
@@ -883,8 +910,23 @@ public partial class MainWindow : Window
         else upload = null;
         if (upload is null)
         {
-            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Выбрать файл", CheckFileExists = true };
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "Выбрать фото или файл", CheckFileExists = true, Multiselect = true };
             if (dialog.ShowDialog(this) != true) return;
+            var files = dialog.FileNames;
+            if (files.All(file => PhotoDecoder.IsPhoto(null, file)))
+            {
+                if (_editingMessage != null || _savingClipboardPhoto) return;
+                if (files.Length + _clipboardPhotos.Count > 12) { ShowToast("В альбом можно добавить до 12 фото."); return; }
+                try
+                {
+                    var photos = await Task.Run(() => files.Select(file => PhotoDecoder.Decode(file, 2048)).ToArray());
+                    if (_activeChat?.Id == chat.Id && PhotoCacheScope == uploadScope)
+                        foreach (var photo in photos) SetClipboardPhoto(photo);
+                }
+                catch { ShowToast("Не удалось открыть выбранные фотографии."); }
+                return;
+            }
+            if (files.Length != 1) { ShowToast("Выбери до 12 фото или один файл."); return; }
             upload = new(chat, dialog.FileName, MessageBox.Text.Trim(), Guid.NewGuid(), _replyTo);
         }
         _pendingUpload = upload;

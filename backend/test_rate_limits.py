@@ -56,13 +56,21 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
 
     def test_upload_rate_limit_returns_429(self):
-        for _ in range(12):
-            response = self.client.post('/attachments', headers={**self.headers(), 'Content-Type': 'text/plain'},
-                params={'peer_id': self.ids[1], 'name': 'qa.txt'}, content=b'x')
+        params = {'peer_id': self.ids[1], 'name': 'qa.txt', 'upload_id': str(uuid.uuid4())}
+        headers = {**self.headers(), 'Content-Type': 'text/plain',
+                   'X-Content-SHA256': hashlib.sha256(b'x').hexdigest()}
+        first = self.client.post('/attachments', headers=headers, params=params, content=b'x')
+        self.assertEqual(first.status_code, 200, first.text)
+        for _ in range(23):
+            response = self.client.post('/attachments', headers=headers,
+                params={**params, 'upload_id': str(uuid.uuid4())}, content=b'x')
             self.assertEqual(response.status_code, 200, response.text)
-        response = self.client.post('/attachments', headers={**self.headers(), 'Content-Type': 'text/plain'},
-            params={'peer_id': self.ids[1], 'name': 'qa.txt'}, content=b'x')
+        response = self.client.post('/attachments', headers=headers,
+            params={**params, 'upload_id': str(uuid.uuid4())}, content=b'x')
         self.assertEqual(response.status_code, 429)
+        replay = self.client.post('/attachments', headers=headers, params=params, content=b'x')
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.json(), first.json())
 
 
 if __name__ == '__main__':

@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.AnnotatedString
@@ -38,6 +39,7 @@ internal fun ChatMessage(message: Message, maxWidth: androidx.compose.ui.unit.Dp
     val textColor = if (message.mine) (if (dark) Color(0xFFFFF0BD) else Ink) else (if (dark) Color(0xFFECF1F6) else Ink)
     val bubbleColor = if (message.mine) (if (dark) Color(0xFF45452C) else Color(0xFFFFEDB2)) else (if (dark) Color(0xFF23313D) else Color.White)
     val reactions = listOfNotNull(message.myReaction, message.peerReaction).groupingBy { it }.eachCount()
+    val album = message.attachment?.takeIf { it.extraPhotos.isNotEmpty() }?.photos.orEmpty()
     val photo = message.attachment?.previewKind() == PreviewKind.PHOTO
     val actions = Modifier.combinedClickable(
         enabled = onReact != null || onLongPress != null || onReply != null,
@@ -76,7 +78,28 @@ internal fun ChatMessage(message: Message, maxWidth: androidx.compose.ui.unit.Dp
                 Spacer(Modifier.height(3.dp))
             }
             if (attachment != null) {
-                if (attachment.mime.startsWith("audio/")) AudioBubble(attachment, player, textColor)
+                if (album.isNotEmpty()) {
+                    Column(Modifier.width(maxWidth).padding(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        album.chunked(2).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                row.forEach { image ->
+                                    Box(Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(5.dp))
+                                        .combinedClickable(onClick = { onPreview?.invoke(image) }, onLongClick = onLongPress)) {
+                                        val bitmap by produceState<android.graphics.Bitmap?>(null, image.id) {
+                                            value = try { media.bitmap(image, 420) }
+                                            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                            catch (_: Exception) { null }
+                                        }
+                                        if (bitmap != null) androidx.compose.foundation.Image(bitmap!!.asImageBitmap(), image.name,
+                                            Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                                        else Text("Фото", Modifier.align(Alignment.Center), color = textColor)
+                                    }
+                                }
+                                if (row.size == 1) Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                } else if (attachment.mime.startsWith("audio/")) AudioBubble(attachment, player, textColor)
                 else AttachmentBubble(attachment, media, textColor, maxWidth, onLongPress, onPreview,
                     photoMeta = if (photo && message.time.isNotEmpty()) {
                         {
@@ -92,7 +115,7 @@ internal fun ChatMessage(message: Message, maxWidth: androidx.compose.ui.unit.Dp
             } else {
                 if (message.text.isNotEmpty()) Text(linkedMessage(message.text), color=textColor, fontSize=15.sp,lineHeight=20.sp,
                     modifier=if (photo) Modifier.padding(horizontal = 10.dp, vertical = 6.dp) else Modifier.padding(top=3.dp))
-                if (!photo && message.time.isNotEmpty()) MessageMeta(message.time, message.receipt, message.mine, dark, Modifier.align(Alignment.End).padding(top=2.dp), textColor)
+                if ((!photo || album.isNotEmpty()) && message.time.isNotEmpty()) MessageMeta(message.time, message.receipt, message.mine, dark, Modifier.align(Alignment.End).padding(top=2.dp), textColor)
             }
             if (message.edited) Text("изменено",fontSize=9.sp,fontStyle=androidx.compose.ui.text.font.FontStyle.Italic,color=textColor.copy(alpha=.6f),modifier=Modifier.align(Alignment.End).padding(top=1.dp))
             if (reactions.isNotEmpty() || (onReact != null && (attachment != null || message.locationId != null))) {
