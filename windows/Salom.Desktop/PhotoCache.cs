@@ -24,7 +24,11 @@ internal sealed class PhotoCache(string root,
             finally { _decodes.Release(); }
         });
 
-    internal Task SaveAsync(string scope, string id, string destination, IProgress<int> progress, CancellationToken token) =>
+    internal Task<string> VoiceAsync(string scope, string id, bool aac, IProgress<int> progress, CancellationToken token) =>
+        UseAsync(scope, id, progress, token, Task.FromResult, aac ? ".aac" : ".m4a");
+
+    internal Task SaveAsync(string scope, string id, string destination, IProgress<int> progress, CancellationToken token,
+        string? voiceMime = null) =>
         UseAsync(scope, id, progress, token, async path =>
         {
             var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
@@ -38,14 +42,14 @@ internal sealed class PhotoCache(string root,
             }
             finally { File.Delete(temporary); }
             return true;
-        });
+        }, voiceMime == null ? "" : voiceMime == "audio/aac" ? ".aac" : ".m4a");
 
-    private async Task<T> UseAsync<T>(string scope, string id, IProgress<int> progress, CancellationToken token, Func<string, Task<T>> use)
+    private async Task<T> UseAsync<T>(string scope, string id, IProgress<int> progress, CancellationToken token, Func<string, Task<T>> use, string suffix = "")
     {
         if (string.IsNullOrWhiteSpace(scope) || !Guid.TryParse(id, out var guid))
             throw new InvalidOperationException("Вложение недоступно.");
         var folder = Path.Combine(root, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scope))));
-        var path = Path.Combine(folder, guid.ToString("N"));
+        var path = Path.Combine(folder, guid.ToString("N") + suffix);
         var gate = Gate(path);
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -82,13 +86,14 @@ internal sealed class PhotoCache(string root,
             try
             {
                 var oldest = new DirectoryInfo(root).EnumerateFiles("*", SearchOption.AllDirectories)
-                    .Where(file => Guid.TryParseExact(file.Name, "N", out _))
+                    .Where(file => (file.Extension is "" or ".aac" or ".m4a") &&
+                        Guid.TryParseExact(Path.GetFileNameWithoutExtension(file.Name), "N", out _))
                     .OrderBy(file => file.LastWriteTimeUtc).ToArray();
                 var total = oldest.Sum(file => file.Exists ? file.Length : 0);
                 var count = oldest.Length;
                 foreach (var file in oldest)
                 {
-                    if (total <= 128L * 1024 * 1024 && count <= 400) break;
+                    if (total <= 512L * 1024 * 1024 && count <= 1500) break;
                     var gate = Gate(file.FullName);
                     if (file.FullName == keep || !gate.Wait(0)) continue;
                     try

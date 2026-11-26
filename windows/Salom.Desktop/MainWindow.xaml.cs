@@ -22,8 +22,6 @@ public partial class MainWindow : Window
         if (_activeVoice != voice) _activeVoice?.Stop();
         _activeVoice = voice;
     }
-    internal Task DownloadVoiceAsync(string scope, string id, string path, IProgress<int> progress, CancellationToken token) =>
-        _client.DownloadPhotoAsync(scope, id, path, progress, token);
     private readonly LocalChatStore _store = new();
     private readonly ObservableCollection<ChatItem> _chats = new();
     private readonly ObservableCollection<ChatMessage> _messages = new();
@@ -1131,12 +1129,13 @@ public partial class MainWindow : Window
     internal async void SaveAttachment(ChatMessage message)
     {
         if (_transfer != null) { ShowToast("Дождись окончания передачи или нажми «Отмена»"); return; }
-        if (string.IsNullOrWhiteSpace(message.AttachmentId)) return;
+        if (message.AttachmentId is not { Length: > 0 } id || PhotoCacheScope is not { } scope) return;
         var dialog = new Microsoft.Win32.SaveFileDialog { FileName = Path.GetFileName(message.AttachmentName ?? "salom-file") };
         if (dialog.ShowDialog(this) != true) return;
         await TransferAsync(async (progress, token) =>
         {
-            await _client.DownloadAttachmentAsync(message.AttachmentId, dialog.FileName, progress, token);
+            await Photos.SaveAsync(scope, id, dialog.FileName, progress, token,
+                message.HasVoice ? message.AttachmentMime ?? "audio/mp4" : null);
             ShowToast("Файл сохранён");
         });
     }

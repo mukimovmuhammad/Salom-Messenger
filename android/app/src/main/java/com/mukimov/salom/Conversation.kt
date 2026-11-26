@@ -572,7 +572,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                     var attached = false
                     try {
                         for (uri in uris.take(remaining)) {
-                            val photo = media.prepare(uri, durable = true)
+                            val photo = media.prepare(uri, durable = true, optimizePhoto = true)
                             prepared += photo
                             if (!photo.isAlbumPhoto) throw DirectoryException("Для альбома выбери фото JPG, PNG, WebP или GIF")
                         }
@@ -650,10 +650,9 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
 
     LaunchedEffect(person.id) {
         if (!saved) {
-            queuedOutgoing = localCache.queuedMessages(person.id)
-            val state = localCache.chatState(person.id)
-            val cachedMessages = localCache.messages(person.id)
+            val (cachedMessages, state, queued) = localCache.snapshot(person.id)
             messages = cachedMessages
+            queuedOutgoing = queued
             messageCursor = state?.messageCursor ?: cachedMessages.maxOfOrNull { it.remoteId } ?: 0L
             eventCursor = state?.eventCursor ?: 0L
             clearedThrough = state?.clearedThrough ?: 0L
@@ -681,7 +680,9 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                     var synchronized = false
                     try {
                         do {
-                            val receiptCursor = latestMessages.filter { it.mine && it.remoteId > 0 }.minOfOrNull { it.remoteId } ?: 0L
+                            val ownMessages = latestMessages.filter { it.mine && it.remoteId > 0 }
+                            val firstPendingReceipt = ownMessages.firstOrNull { it.receipt != "read" }?.remoteId
+                            val receiptCursor = firstPendingReceipt?.minus(1) ?: ownMessages.lastOrNull()?.remoteId ?: messageCursor
                             val batch = directory.messages(person.id, maxOf(messageCursor, clearedThrough), receiptCursor, eventCursor)
                             val nextCleared = maxOf(clearedThrough, batch.clearedThrough)
                             val refreshed = latestMessages.map { message -> if (message.mine) batch.receipts[message.remoteId]?.let { message.copy(receipt = it) } ?: message else message }
@@ -1375,7 +1376,10 @@ internal fun AttachmentBubble(
     LaunchedEffect(attachment.id, attempt) {
         if (photo) {
             loading = true
-            try { bitmap = media.bitmap(attachment); error = null }
+            try {
+                bitmap = media.preview(attachment, 640) ?: throw DirectoryException("Не удалось открыть фото")
+                error = null
+            }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { error = "Нажми, чтобы повторить" }
             finally { loading = false }
@@ -1383,19 +1387,21 @@ internal fun AttachmentBubble(
     }
     val color = contentColor
     val open: () -> Unit = open@{
+        if (photo && error != null && bitmap == null) {
+            attempt++
+            return@open
+        }
         if (preview != null && onPreview != null) {
             onPreview(attachment)
             return@open
         }
         if (loading) return@open
-        if (photo && error != null && bitmap == null) attempt++ else {
-            openJob = scope.launch {
-                loading = true; error = null; downloadProgress = 0f
-                try { media.open(attachment) { downloadProgress = it } }
+        openJob = scope.launch {
+            loading = true; error = null; downloadProgress = 0f
+            try { media.open(attachment) { downloadProgress = it } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { error = (failure as? DirectoryException)?.message ?: "Не удалось открыть файл" }
-                finally { loading = false; openJob = null }
-            }
+            finally { loading = false; openJob = null }
         }
     }
     Column(Modifier.widthIn(max = minOf(maxWidth, 248.dp))

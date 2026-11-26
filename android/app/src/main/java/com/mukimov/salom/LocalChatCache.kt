@@ -121,6 +121,10 @@ internal data class CachedOutgoing(
 
 @Dao
 internal interface LocalChatDao {
+    @Transaction
+    suspend fun snapshot(peerId: String): Triple<List<CachedMessage>, CachedChatState?, List<CachedOutgoing>> =
+        Triple(messages(peerId), chatState(peerId), queuedMessages(peerId))
+
     @Query("SELECT * FROM cached_messages WHERE peerId = :peerId ORDER BY remoteId")
     suspend fun messages(peerId: String): List<CachedMessage>
 
@@ -226,6 +230,11 @@ internal abstract class LocalChatDatabase : RoomDatabase() {
 
 internal class LocalChatCache(context: Context, accountId: String) {
     private val dao = LocalChatDatabase.get(context, accountId).chatDao()
+
+    suspend fun snapshot(peerId: String) = withContext(Dispatchers.IO) {
+        val (messages, state, queue) = dao.snapshot(peerId)
+        Triple(messages.map(CachedMessage::toMessage), state, queue)
+    }
 
     suspend fun messages(peerId: String): List<Message> = withContext(Dispatchers.IO) {
         dao.messages(peerId).map(CachedMessage::toMessage)

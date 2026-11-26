@@ -86,7 +86,7 @@ internal fun ChatMessage(message: Message, maxWidth: androidx.compose.ui.unit.Dp
                                     Box(Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(5.dp))
                                         .combinedClickable(onClick = { onPreview?.invoke(image) }, onLongClick = onLongPress)) {
                                         val bitmap by produceState<android.graphics.Bitmap?>(null, image.id) {
-                                            value = try { media.bitmap(image, 420) }
+                                            value = try { media.preview(image, 420) }
                                             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                                             catch (_: Exception) { null }
                                         }

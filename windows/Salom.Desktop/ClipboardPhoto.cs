@@ -54,16 +54,29 @@ internal static class ClipboardPhoto
 
     internal static string Save(BitmapSource bitmap, string directory, Guid id)
     {
+        var scale = Math.Min(1d, 1920d / Math.Max(bitmap.PixelWidth, bitmap.PixelHeight));
+        if (scale < 1d)
+            bitmap = new TransformedBitmap(bitmap, new System.Windows.Media.ScaleTransform(scale, scale));
+        var pixels = new FormatConvertedBitmap(bitmap, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+        var row = new byte[pixels.PixelWidth * 4];
+        bool opaque = true;
+        for (var y = 0; y < pixels.PixelHeight && opaque; y++)
+        {
+            pixels.CopyPixels(new System.Windows.Int32Rect(0, y, pixels.PixelWidth, 1), row, row.Length, 0);
+            for (var channel = 3; channel < row.Length && opaque; channel += 4)
+                opaque = row[channel] == byte.MaxValue;
+        }
+
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"photo_{id:N}.png");
+        var path = Path.Combine(directory, $"photo_{id:N}." + (opaque ? "jpg" : "png"));
         var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
         try
         {
             using (output)
             {
-                var png = new PngBitmapEncoder();
-                png.Frames.Add(BitmapFrame.Create(bitmap));
-                png.Save(output);
+                BitmapEncoder encoder = opaque ? new JpegBitmapEncoder { QualityLevel = 86 } : new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                encoder.Save(output);
                 if (output.Length > DesktopClient.MaxAttachmentBytes)
                     throw new InvalidDataException("Фото весит больше 25 МБ. Уменьши его и попробуй снова.");
             }
