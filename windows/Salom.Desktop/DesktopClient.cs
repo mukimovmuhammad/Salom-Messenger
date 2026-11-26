@@ -178,10 +178,41 @@ internal sealed class DesktopClient
     internal async Task<ChatMessage> SendAttachmentAsync(ChatItem peer, string path, string text,
         Guid transferId, IProgress<int> progress, CancellationToken cancellationToken, long? replyId = null, VoiceClip? voice = null)
     {
+        var scope = PhotoCacheScope ?? throw new InvalidOperationException("Сначала войди в аккаунт.");
+        var attachmentId = await UploadAttachmentAsync(peer, path, transferId, progress, cancellationToken, scope, voice);
+        if (scope != PhotoCacheScope) throw new OperationCanceledException();
+        using var sent = await SendAsync(HttpMethod.Post, "messages",
+            new { recipient_id = peer.Id, client_id = transferId.ToString(), text, attachment_id = attachmentId, reply_to_id = replyId },
+            authenticated: true, cancellationToken: cancellationToken);
+        return ParseMessage(sent.RootElement);
+    }
+
+    internal async Task<ChatMessage> SendPhotoAlbumAsync(ChatItem peer, IReadOnlyList<string> paths, string text,
+        Guid messageId, IProgress<int> progress, CancellationToken token, long? replyId)
+    {
+        if (paths.Count is < 2 or > 12) throw new ArgumentOutOfRangeException(nameof(paths));
+        var scope = PhotoCacheScope ?? throw new InvalidOperationException("Сначала войди в аккаунт.");
+        var ids = new List<string>(paths.Count);
+        foreach (var path in paths)
+        {
+            var index = ids.Count;
+            var uploadId = new Guid(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"album:{messageId}:{index}")).AsSpan(0, 16));
+            ids.Add(await UploadAttachmentAsync(peer, path, uploadId,
+                new Progress<int>(percent => progress.Report((index * 100 + percent) / paths.Count)), token, scope));
+        }
+        if (scope != PhotoCacheScope) throw new OperationCanceledException();
+        using var sent = await SendAsync(HttpMethod.Post, "messages",
+            new { recipient_id = peer.Id, client_id = messageId.ToString(), text, album_ids = ids, reply_to_id = replyId },
+            authenticated: true, cancellationToken: token);
+        return ParseMessage(sent.RootElement);
+    }
+
+    private async Task<string> UploadAttachmentAsync(ChatItem peer, string path, Guid transferId,
+        IProgress<int> progress, CancellationToken cancellationToken, string scope, VoiceClip? voice = null)
+    {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(3));
         var token = timeout.Token;
-        var scope = PhotoCacheScope ?? throw new InvalidOperationException("Сначала войди в аккаунт.");
         await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
         if (file.Length is <= 0 or > MaxAttachmentBytes) throw new InvalidOperationException("Файл должен быть размером от 1 байта до 25 МБ.");
         var digest = await SHA256.HashDataAsync(file, token);
@@ -200,13 +231,7 @@ internal sealed class DesktopClient
         request.Content.Headers.ContentType = new MediaTypeHeaderValue(voice == null ? "application/octet-stream" : "audio/mp4");
         using var response = await _http.SendAsync(request, token);
         using var metadata = await ReadJsonAsync(response);
-        var attachmentId = metadata.RootElement.GetProperty("id").GetString();
-        token.ThrowIfCancellationRequested();
-        if (scope != PhotoCacheScope) throw new OperationCanceledException();
-        using var sent = await SendAsync(HttpMethod.Post, "messages",
-            new { recipient_id = peer.Id, client_id = transferId.ToString(), text, attachment_id = attachmentId, reply_to_id = replyId },
-            authenticated: true, cancellationToken: token);
-        return ParseMessage(sent.RootElement);
+        return metadata.RootElement.GetProperty("id").GetString() ?? throw new InvalidDataException("Вложение недоступно.");
     }
 
     private sealed class UploadContent(FileStream file, IProgress<int> progress) : HttpContent
@@ -364,7 +389,11 @@ internal sealed class DesktopClient
                 clientId.TryGetGuid(out var guid) ? guid : null,
             reply.ValueKind == JsonValueKind.Object && reply.TryGetProperty("id", out var replyId) ? replyId.GetInt64() : null,
             m.TryGetProperty("edited_at", out var edited) && edited.ValueKind == JsonValueKind.Number,
-            Reaction(mine ? "sender" : "recipient"), Reaction(mine ? "recipient" : "sender"));
+            Reaction(mine ? "sender" : "recipient"), Reaction(mine ? "recipient" : "sender"),
+            m.TryGetProperty("album", out var album) && album.ValueKind == JsonValueKind.Array
+                ? album.EnumerateArray().Take(12).Select(photo => new AlbumPhoto(
+                    photo.GetProperty("id").GetString()!, photo.GetProperty("name").GetString()!,
+                    photo.GetProperty("mime").GetString()!)).ToArray() : null);
     }
 
     private Task<JsonDocument> GetAsync(string path) => SendAsync(HttpMethod.Get, path, null, true);
@@ -415,6 +444,8 @@ internal sealed record ChatHistory(List<ChatMessage> Messages, List<ChatHistoryE
 internal sealed record ChatHistoryEvent(long MessageId, string? Kind, ChatMessage? Edited);
 internal sealed record VoiceClip(int DurationMs, int[] Waveform);
 
+internal sealed record AlbumPhoto(string Id, string Name, string Mime);
+
 internal sealed class ChatMessage
 {
     public long Id { get; }
@@ -439,6 +470,11 @@ internal sealed class ChatMessage
     public string? AttachmentMime { get; }
     public bool HasAttachment => !string.IsNullOrWhiteSpace(AttachmentId);
     public bool HasPhoto => HasAttachment && PhotoDecoder.IsPhoto(AttachmentMime, AttachmentName);
+    public IReadOnlyList<AlbumPhoto> Album { get; }
+    public bool HasAlbum => Album.Count > 1;
+    public bool HasSinglePhoto => HasPhoto && !HasAlbum;
+    public IEnumerable<ChatMessage> AlbumTiles => Album.Select(photo =>
+        new ChatMessage(Id, "", IsMine, Created, photo.Id, photo.Name, photo.Mime));
     public bool HasVoice => HasAttachment && (Voice != null ||
         (AttachmentName?.StartsWith("voice_", StringComparison.OrdinalIgnoreCase) == true &&
          Path.GetExtension(AttachmentName).Equals(".m4a", StringComparison.OrdinalIgnoreCase)));
@@ -452,13 +488,14 @@ internal sealed class ChatMessage
     public bool HasReply => ReplyText != null;
     internal ChatMessage(long id, string text, bool mine, DateTime created, string? attachmentId = null, string? attachmentName = null,
         string? attachmentMime = null, string? replyText = null, bool replyIsMine = false, VoiceClip? voice = null,
-        Guid? clientId = null, long? replyId = null, bool edited = false, string? myReaction = null, string? peerReaction = null)
+        Guid? clientId = null, long? replyId = null, bool edited = false, string? myReaction = null, string? peerReaction = null, AlbumPhoto[]? album = null)
     {
         Id = id; Text = text; IsMine = mine; Created = created;
         AttachmentId = attachmentId; AttachmentName = attachmentName; AttachmentMime = attachmentMime;
         ReplyText = replyText; ReplyIsMine = replyIsMine; Voice = voice; ClientId = clientId;
         ReplyId = replyId; Edited = edited;
         MyReaction = myReaction; PeerReaction = peerReaction;
+        Album = album ?? Array.Empty<AlbumPhoto>();
     }
 }
 

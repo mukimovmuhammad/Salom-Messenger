@@ -156,7 +156,14 @@
                                                 </Style>
                                             </Button.Style>
                                         </Button>
-                                        <local:PhotoPreview Visibility="{Binding HasPhoto, Converter={StaticResource BoolVisibility}}"/>
+                                        <local:PhotoPreview Visibility="{Binding HasSinglePhoto, Converter={StaticResource BoolVisibility}}"/>
+                                        <ItemsControl ItemsSource="{Binding AlbumTiles}" MaxWidth="400" HorizontalAlignment="Left"
+                                                      Visibility="{Binding HasAlbum, Converter={StaticResource BoolVisibility}}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate><DataTemplate>
+                                                <local:PhotoPreview Margin="2"/>
+                                            </DataTemplate></ItemsControl.ItemTemplate>
+                                        </ItemsControl>
                                         <local:VoiceBubble Visibility="{Binding HasVoice, Converter={StaticResource BoolVisibility}}"/>
                                     </Grid>
                                     <TextBlock Text="{Binding ReactionLabel}" Foreground="#EDF1F5" Margin="0,4,0,0"
@@ -172,15 +179,21 @@
                     <Border x:Name="ClipboardPhotoBanner" Visibility="Collapsed" Background="#273442"
                             CornerRadius="12" Padding="8" Margin="0,0,0,7">
                         <DockPanel LastChildFill="True">
-                            <Border DockPanel.Dock="Left" Width="62" Height="48" Background="#17212B" CornerRadius="6" Margin="0,0,10,0">
-                                <Image x:Name="ClipboardPhotoImage" Stretch="Uniform" AutomationProperties.Name="Предпросмотр фото"/>
-                            </Border>
+                            <TextBlock DockPanel.Dock="Top" x:Name="ClipboardPhotoCount" Margin="0,0,0,5" FontWeight="SemiBold"/>
                             <Button DockPanel.Dock="Right" Width="34" Height="34" Padding="0" Background="#334353" Foreground="#EDF1F5"
                                     Content="×" Click="RemoveClipboardPhoto_Click" AutomationProperties.Name="Убрать фото"/>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Фото из буфера" FontWeight="SemiBold"/>
-                                <TextBlock Text="Можно добавить подпись" Foreground="#BDCAD7" FontSize="11" TextTrimming="CharacterEllipsis"/>
-                            </StackPanel>
+                            <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                                <ItemsControl x:Name="ClipboardPhotoList">
+                                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate><DataTemplate>
+                                        <Grid Width="55" Height="48" Margin="0,0,5,0" Background="#17212B">
+                                            <Image Source="{Binding}" Stretch="Uniform" AutomationProperties.Name="Предпросмотр фото"/>
+                                            <Button Content="×" Width="21" Height="21" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                    Padding="0" Click="RemoveOneClipboardPhoto_Click" AutomationProperties.Name="Убрать фото"/>
+                                        </Grid>
+                                    </DataTemplate></ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
                         </DockPanel>
                     </Border>
                     <Border Background="#222C38" CornerRadius="22" BorderBrush="#374656" BorderThickness="1" Padding="6,4"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="MessageBox" Background="Transparent" VerticalContentAlignment="Center" MinHeight="38" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Hidden" MaxHeight="140" Padding="12,7" PreviewKeyDown="MessageBox_KeyDown"/><Button Grid.Column="1" x:Name="FileButton" Content="Файл" Margin="6,0,0,0" Background="#334353" Foreground="#EDF1F5" Click="File_Click"/><Button Grid.Column="2" x:Name="SendButton" Width="40" Height="40" Padding="10" Margin="6,0,0,0" ToolTip="Отправить · Enter" Click="Send_Click"><Viewbox><Path Stroke="#11161D" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M22,2 L15,22 L11,13 L2,9 Z M22,2 L11,13"/></Viewbox></Button>

@@ -41,7 +41,7 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AttachmentSheet(onDismiss: () -> Unit, onPhoto: (Uri) -> Unit,
-    openPicker: () -> Unit, openFiles: () -> Unit, openLocation: () -> Unit) {
+    openPicker: () -> Unit, openVideos: () -> Unit, openFiles: () -> Unit, openLocation: () -> Unit) {
     val context = LocalContext.current
     val resolver = context.contentResolver
     val colors = MaterialTheme.colorScheme
@@ -68,7 +68,7 @@ internal fun AttachmentSheet(onDismiss: () -> Unit, onPhoto: (Uri) -> Unit,
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(Modifier.fillMaxWidth().padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Галерея", Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                TextButton(onClick = openPicker) { Text("Все фото и видео") }
+                TextButton(onClick = openPicker) { Text("Выбрать фото") }
             }
             if (recent.isNotEmpty()) {
                 LazyVerticalGrid(GridCells.Fixed(3), Modifier.fillMaxWidth().heightIn(max = 270.dp),
@@ -103,7 +103,7 @@ internal fun AttachmentSheet(onDismiss: () -> Unit, onPhoto: (Uri) -> Unit,
             }
             HorizontalDivider(Modifier.padding(top = 9.dp))
             Row(Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf("Галерея" to openPicker, "Файл" to openFiles, "Геопозиция" to openLocation).forEachIndexed { index, (title, action) ->
+                listOf("Фото" to openPicker, "Видео" to openVideos, "Файл" to openFiles, "Геопозиция" to openLocation).forEachIndexed { index, (title, action) ->
                     Column(Modifier.weight(1f).heightIn(min = 56.dp).clip(RoundedCornerShape(16.dp))
                         .background(if (index == 0) colors.secondaryContainer else colors.surface)
                         .clickable(role = Role.Button, onClick = action).padding(vertical = 7.dp),

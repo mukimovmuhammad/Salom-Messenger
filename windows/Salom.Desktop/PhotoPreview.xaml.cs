@@ -6,7 +6,14 @@ namespace Salom.Desktop;
 public partial class PhotoPreview : System.Windows.Controls.UserControl
 {
     private CancellationTokenSource? _load;
-    public PhotoPreview() => InitializeComponent();
+    public PhotoPreview()
+    {
+        InitializeComponent();
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible && Thumbnail.Source == null && _load == null) _ = LoadAsync();
+        };
+    }
 
     private void Preview_Loaded(object sender, RoutedEventArgs e) => _ = LoadAsync();
 
@@ -26,7 +33,7 @@ public partial class PhotoPreview : System.Windows.Controls.UserControl
     private async Task LoadAsync()
     {
         _load?.Cancel();
-        if (!IsLoaded || DataContext is not ChatMessage { HasPhoto: true, AttachmentId: { } id } ||
+        if (!IsLoaded || !IsVisible || DataContext is not ChatMessage { HasPhoto: true, AttachmentId: { } id } ||
             Window.GetWindow(this) is not MainWindow window || window.PhotoCacheScope is not { } scope)
             return;
         using var load = new CancellationTokenSource();

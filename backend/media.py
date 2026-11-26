@@ -48,6 +48,22 @@ def schema(db):
     if 'attachment_id' not in {row[1] for row in db.execute('PRAGMA table_info(messages)')}:
         db.execute('ALTER TABLE messages ADD COLUMN attachment_id TEXT REFERENCES attachments(id)')
 
+ALBUM_SCHEMA = '''CREATE TABLE IF NOT EXISTS message_album_photos (
+    message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 11),
+    attachment_id TEXT NOT NULL UNIQUE REFERENCES attachments(id),
+    PRIMARY KEY (message_id, position))'''
+
+def album_extras(db, message_id):
+    return [row['attachment_id'] for row in db.execute(
+        'SELECT attachment_id FROM message_album_photos WHERE message_id=? ORDER BY position',
+        (message_id,)).fetchall()]
+
+def attachment_message(db, attachment_id):
+    return db.execute('''SELECT id FROM messages WHERE attachment_id=?
+        UNION ALL SELECT message_id AS id FROM message_album_photos WHERE attachment_id=? LIMIT 1''',
+        (attachment_id, attachment_id)).fetchone()
+
 def metadata(db, attachment_id):
     if not attachment_id: return None
     row = db.execute('SELECT id,name,mime,size,kind,duration_ms,waveform,sha256 FROM attachments WHERE id=? AND ready=1', (attachment_id,)).fetchone()
@@ -190,7 +206,7 @@ def install_routes(app, connect, current_profile, throttle):
     @app.post('/attachments')
     async def upload(request: Request, peer_id: str = Query(min_length=36, max_length=36), name: str = Query(min_length=1, max_length=180), kind: str = Query(default='file', pattern='^(file|voice)$'), duration_ms: int = Query(default=0, ge=0, le=300000), waveform: str = Query(default='', max_length=160), upload_id: uuid.UUID | None = Query(default=None), authorization: str | None = Header(default=None)):
         owner = current_profile(authorization)['id']
-        throttle('upload-attachment:' + owner, limit=12)
+        throttle('upload-attachment-request:' + owner, limit=60)
         try: uuid.UUID(peer_id)
         except ValueError: raise HTTPException(400, 'Неверный получатель')
         if owner == peer_id: raise HTTPException(400, 'Используй Избранное для личных файлов')
@@ -217,7 +233,7 @@ def install_routes(app, connect, current_profile, throttle):
             db.execute('BEGIN IMMEDIATE')
             lock_sender(db, owner)
             if not db.execute('SELECT 1 FROM profiles WHERE id=? AND is_active=1', (peer_id,)).fetchone(): raise HTTPException(404, 'Получатель недоступен')
-            stale = db.execute('SELECT id FROM attachments WHERE owner_id=? AND created<? AND NOT EXISTS(SELECT 1 FROM messages WHERE attachment_id=attachments.id) LIMIT 32', (owner, time.time()-86400)).fetchall()
+            stale = db.execute('SELECT id FROM attachments WHERE owner_id=? AND created<? AND NOT EXISTS(SELECT 1 FROM messages WHERE attachment_id=attachments.id) AND NOT EXISTS(SELECT 1 FROM message_album_photos WHERE attachment_id=attachments.id) LIMIT 32', (owner, time.time()-86400)).fetchall()
             for row in stale:
                 db.execute('DELETE FROM attachments WHERE id=?', (row['id'],))
                 (ROOT / row['id']).unlink(missing_ok=True)
@@ -229,6 +245,7 @@ def install_routes(app, connect, current_profile, throttle):
                     existing['waveform'], existing['sha256']) != (peer_id, filename, reserved, kind, duration_ms, json.dumps(peaks), expected_hash):
                     raise HTTPException(409, 'Этот идентификатор уже использован для другого файла')
                 return metadata(db, attachment_id)
+            throttle('upload-attachment:' + owner, limit=24)
             used = db.execute('SELECT COALESCE(SUM(size),0) FROM attachments WHERE owner_id=?', (owner,)).fetchone()[0]
             if used + reserved > MAX_ACCOUNT: raise HTTPException(413, 'Лимит вложений аккаунта — 200 МБ')
             db.execute('INSERT INTO attachments(id,owner_id,peer_id,name,mime,size,created,ready,kind,duration_ms,waveform) VALUES(?,?,?,?,?,?,?,0,?,?,?)', (attachment_id, owner, peer_id, filename, mime, reserved, time.time(), kind, duration_ms, json.dumps(peaks)))
@@ -285,7 +302,7 @@ def install_routes(app, connect, current_profile, throttle):
             attachment = db.execute('SELECT * FROM attachments WHERE id=? AND ready=1', (str(attachment_id),)).fetchone()
             if not attachment: raise HTTPException(404, 'Файл недоступен')
             peer = attachment['peer_id'] if attachment['owner_id'] == owner else attachment['owner_id']
-            message = db.execute('SELECT id FROM messages WHERE attachment_id=?', (str(attachment_id),)).fetchone()
+            message = attachment_message(db, str(attachment_id))
             hidden = message and db.execute('SELECT 1 FROM message_hides WHERE owner_id=? AND message_id=?', (owner, message['id'])).fetchone()
             allowed = owner in (attachment['owner_id'], attachment['peer_id']) and message and not hidden and message['id'] > cutoff(db, owner, peer)
             pending_owner = owner == attachment['owner_id'] and not message

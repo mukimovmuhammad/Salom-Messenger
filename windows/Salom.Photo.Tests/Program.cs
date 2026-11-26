@@ -45,7 +45,15 @@ try
             var draft = ClipboardPhoto.Read(copied);
             Check(draft is { IsFrozen: true, PixelWidth: 120, PixelHeight: 60 }, "Clipboard PNG could not be previewed");
             var output = ClipboardPhoto.Save(draft!, temporary.FullName, Guid.NewGuid());
-            Check(PhotoDecoder.Decode(output, 120).PixelHeight == 60, "Queued PNG could not be decoded as a photo");
+            Check(PhotoDecoder.Decode(output, 120).PixelHeight == 60, "Queued image could not be decoded");
+            var opaque = new System.Windows.Media.Imaging.FormatConvertedBitmap(
+                draft!, System.Windows.Media.PixelFormats.Bgr24, null, 0);
+            var compressed = ClipboardPhoto.Save(opaque, temporary.FullName, Guid.NewGuid());
+            Check(Path.GetExtension(compressed) == ".jpg", "Opaque clipboard photo should use JPEG");
+            var transparent = System.Windows.Media.Imaging.BitmapSource.Create(1, 1, 96, 96,
+                System.Windows.Media.PixelFormats.Bgra32, null, new byte[] { 4, 5, 6, 60 }, 4);
+            Check(Path.GetExtension(ClipboardPhoto.Save(transparent, temporary.FullName, Guid.NewGuid())) == ".png",
+                "Transparent photos must preserve alpha");
 
             var screenshot = new System.Windows.DataObject();
             screenshot.SetData(System.Windows.DataFormats.Bitmap, draft);
@@ -71,7 +79,7 @@ try
     clipboardThread.Start();
     clipboardThread.Join();
     if (clipboardError != null) throw new Exception("Clipboard checks failed", clipboardError);
-    Console.WriteLine("Clipboard checks passed: PNG, bitmap, copied file, text and PNG export.");
+    Console.WriteLine("Clipboard checks passed: JPEG optimization, PNG transparency, file and text paste.");
 
     const string owner = "test-api\nowner";
     var calls = 0;
@@ -106,6 +114,14 @@ try
     Check((await cache.LoadAsync(owner, retry, 40, progress, default)).PixelWidth == 40 && calls == 4,
         "Retry should redownload a corrupt file");
 
+    var voiceId = Guid.NewGuid().ToString();
+    var beforeVoice = calls;
+    var voice = await cache.VoiceAsync(owner, voiceId, false, progress, default);
+    Check(Path.GetExtension(voice) == ".m4a" && File.Exists(voice), "The player needs the cached audio extension");
+    Check(await cache.VoiceAsync(owner, voiceId, false, progress, default) == voice, "Playback should reopen the same voice file");
+    await cache.SaveAsync(owner, voiceId, Path.Combine(temporary.FullName, "saved.m4a"), progress, default, "audio/mp4");
+    Check(calls == beforeVoice + 1, "Repeated playback, reopen and save must use a single download");
+
     Console.WriteLine("Photo checks passed: JPEG, PNG, WebP, GIF, size and pixels, MIME fallback, cache reuse, account isolation, retry and original save.");
 
     var pcm = Path.Combine(temporary.FullName, "fixture.wav");
@@ -133,6 +149,23 @@ try
     reopened.RemoveOutgoing(owner, outgoing.Id);
     Check(store.Outbox(owner).Count == 0, "Confirmed outbox item not removed");
 
+    var album = Enumerable.Range(0, 12).Select(i =>
+        new AlbumPhoto(Guid.NewGuid().ToString(), $"{i}.png", "image/png")).ToArray();
+    var albumMessage = new ChatMessage(28, "Альбом", false, DateTime.Now,
+        album[0].Id, album[0].Name, album[0].Mime, album: album);
+    reopened.Save(owner, peer.Id, new[] { albumMessage });
+    var cachedAlbum = reopened.Load(owner, peer.Id).Single(message => message.Id == 28);
+    Check(cachedAlbum.HasAlbum && !cachedAlbum.HasSinglePhoto && cachedAlbum.Album.SequenceEqual(album),
+        "Offline album lost photos or their order");
+    Check(cachedAlbum.AlbumTiles.Select(photo => photo.AttachmentId).SequenceEqual(album.Select(photo => photo.Id)),
+        "Album must contain a separate preview for each photo");
+    reopened.RemoveHistory(owner, peer.Id, 0, new[] { albumMessage.Id });
+    var albumOutgoing = new DesktopOutgoing(Guid.NewGuid(), peer, "Подпись", 17, DateTime.Now,
+        PhotoPaths: new[] { gif, gif + ".png" });
+    reopened.Enqueue(owner, albumOutgoing);
+    Check(reopened.Outbox(owner, peer.Id).Single().PhotoPaths!.SequenceEqual(albumOutgoing.PhotoPaths),
+        "Album outbox lost photo paths across serialization");
+    reopened.RemoveOutgoing(owner, albumOutgoing.Id);
     var photoOutgoing = new DesktopOutgoing(Guid.NewGuid(), peer, "Подпись", 17, DateTime.Now, PhotoPath: gif);
     store.Enqueue(owner, photoOutgoing);
     Check(reopened.Outbox(owner, peer.Id).Single() == photoOutgoing, "Photo outbox lost its photo, caption, reply or message ID");
@@ -146,6 +179,6 @@ try
           reopened.ReadCursor(owner, peer.Id) == (22L, 9L, 5L), "Chat history and cursor must be scoped to the account");
     Check(edited.Edited && edited.ReplyId == 17, "Edit and quote metadata did not survive restart");
     Check(edited.ReactionLabel == "👍 2", "Reactions did not survive restart or aggregate");
-    Console.WriteLine("Windows voice AAC, durable outbox, account isolation, edit and quote checks passed.");
+    Console.WriteLine("Windows albums, voice AAC, durable outbox, account isolation, edit and quote checks passed.");
 }
 finally { SqliteConnection.ClearAllPools(); temporary.Delete(recursive: true); }

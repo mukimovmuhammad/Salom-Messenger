@@ -163,7 +163,10 @@ internal class DirectoryClient(context: Context) {
 
     suspend fun sendMessage(peerId: String, text: String, clientId: String, attachment: Attachment? = null, replyToId: Long? = null): Message = withContext(Dispatchers.IO) {
         syncLocal()
-        message(request("messages", JSONObject().put("recipient_id", peerId).put("text", text).put("client_id", clientId).apply { attachment?.let { put("attachment_id", it.id) }; replyToId?.let { put("reply_to_id", it) } }, "POST"))
+        message(request("messages", JSONObject().put("recipient_id", peerId).put("text", text).put("client_id", clientId).apply { attachment?.let {
+            if (it.extraPhotos.isEmpty()) put("attachment_id", it.id)
+            else put("album_ids", org.json.JSONArray(it.photos.map { photo -> photo.id }))
+        }; replyToId?.let { put("reply_to_id", it) } }, "POST"))
     }
 
     suspend fun heartbeat() = withContext(Dispatchers.IO) {
@@ -405,7 +408,9 @@ internal class DirectoryClient(context: Context) {
         val reactions = json.optJSONObject("reactions")
         val senderReaction = reactions?.opt("sender") as? String
         val recipientReaction = reactions?.opt("recipient") as? String
-        return Message(json.getString("text"), mine, time, json.getLong("id"), json.optJSONObject("attachment")?.let { Attachment.from(it) }, json.optString("receipt", "sent"), quote?.optLong("id")?.takeIf { it > 0 }, quoteSender?.let { if (it == ownId) "Вы" else "Собеседник" }, quote?.optString("text"), json.optDouble("edited_at",0.0)>0, json.optString("location_id").takeIf { it.isNotBlank() && it!="null" }, json.optString("client_id").takeIf { it.isNotBlank() && it != "null" },
+        return Message(json.getString("text"), mine, time, json.getLong("id"), json.optJSONObject("attachment")?.let {
+            Attachment.from(it).copy(extraPhotos = Attachment.parsePhotos(json.optJSONArray("album")).drop(1))
+        }, json.optString("receipt", "sent"), quote?.optLong("id")?.takeIf { it > 0 }, quoteSender?.let { if (it == ownId) "Вы" else "Собеседник" }, quote?.optString("text"), json.optDouble("edited_at",0.0)>0, json.optString("location_id").takeIf { it.isNotBlank() && it!="null" }, json.optString("client_id").takeIf { it.isNotBlank() && it != "null" },
             myReaction = if (mine) senderReaction else recipientReaction, peerReaction = if (mine) recipientReaction else senderReaction)
     }
 }

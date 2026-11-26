@@ -12,7 +12,6 @@ public partial class VoiceBubble : System.Windows.Controls.UserControl
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromMilliseconds(140) };
     private CancellationTokenSource? _load;
     private MediaPlayer? _player;
-    private string? _file;
     private bool _ready;
     private bool _playing;
     private bool _updating;
@@ -49,15 +48,10 @@ public partial class VoiceBubble : System.Windows.Controls.UserControl
         _load = load;
         VoiceTime.Text = "Загрузка…";
         PlayButton.IsEnabled = false;
-        var folder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SALOM", "VoicePlayback");
-        var suffix = message.AttachmentMime == "audio/aac" ? ".aac" : ".m4a";
-        var path = System.IO.Path.Combine(folder, Guid.NewGuid().ToString("N") + suffix);
         try
         {
-            Directory.CreateDirectory(folder);
-            await window.DownloadVoiceAsync(scope, id, path, new Progress<int>(), load.Token);
+            var path = await window.Photos.VoiceAsync(scope, id, message.AttachmentMime == "audio/aac", new Progress<int>(), load.Token);
             if (load.IsCancellationRequested || window.PhotoCacheScope != scope) return;
-            _file = path;
             var player = new MediaPlayer();
             _player = player;
             player.MediaOpened += (_, _) =>
@@ -91,7 +85,6 @@ public partial class VoiceBubble : System.Windows.Controls.UserControl
         finally
         {
             if (_load == load) _load = null;
-            if (_file != path) DeleteFile(path);
             if (_player == null) PlayButton.IsEnabled = true;
         }
     }
@@ -103,17 +96,11 @@ public partial class VoiceBubble : System.Windows.Controls.UserControl
         _clock.Stop();
         _player?.Close();
         _player = null;
-        if (_file != null) { DeleteFile(_file); _file = null; }
         _ready = false;
         Seek.IsEnabled = false;
         PlayButton.IsEnabled = true;
         _duration = TimeSpan.FromMilliseconds((DataContext as ChatMessage)?.Voice?.DurationMs ?? 0);
         SetPlaying(false);
-    }
-
-    private static void DeleteFile(string path)
-    {
-        try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
     private void SetPlaying(bool playing)
