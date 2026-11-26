@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <Version>0.16.6</Version>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -11,5 +12,9 @@
     <Resource Include="assets\salom.ico" />
     <Resource Include="assets\salom-logo-512.png" />
     <EmbeddedResource Include="payload\SalomDesktop.zip" LogicalName="Salom.Setup.SalomDesktop.zip" Condition="Exists('payload\SalomDesktop.zip')" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Salom.Desktop\DesktopInstance.cs" Link="DesktopInstance.cs" />
+    <Compile Include="..\Salom.Desktop\DesktopBuildVersion.cs" Link="DesktopBuildVersion.cs" />
   </ItemGroup>
 </Project>

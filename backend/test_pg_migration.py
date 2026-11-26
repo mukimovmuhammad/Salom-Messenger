@@ -24,6 +24,7 @@ class PostgresMigrationRehearsalTests(unittest.TestCase):
                 with app.connect() as db:
                     db.execute("INSERT INTO profiles(id,token_hash,name,username,username_key,is_active,created,updated) VALUES(?,?,?,?,?,1,?,?)", (a, "a" * 64, "Synthetic A", "syntha", "syntha", now, now))
                     db.execute("INSERT INTO profiles(id,token_hash,name,username,username_key,is_active,created,updated) VALUES(?,?,?,?,?,1,?,?)", (b, "b" * 64, "Synthetic B", "synthb", "synthb", now, now))
+                    db.execute("UPDATE profiles SET about=? WHERE id=?", ("Салом из теста", a))
                     db.execute("INSERT INTO registrations(ip,at) VALUES(?,?)", ("192.0.2.10", now))
                     db.execute("INSERT INTO attachments(id,owner_id,peer_id,name,mime,size,created,ready,kind,duration_ms,waveform) VALUES(?,?,?,?,?,?,?,1,?,?,?)", (file_id, a, b, "test.png", "image/png", 123, now, "photo", 0, "[]"))
                     db.execute("INSERT INTO conversation_clears(owner_id,peer_id,through_id) VALUES(?,?,?)", (a, b, 2))
@@ -33,6 +34,8 @@ class PostgresMigrationRehearsalTests(unittest.TestCase):
                     db.execute("INSERT INTO live_locations(id,owner_id,peer_id,created,expires,latitude,longitude,updated,active) VALUES(?,?,?,?,?,?,?,?,1)", (str(uuid.uuid4()), a, b, now, now + 3600, 38.56, 68.78, now))
                     db.execute("INSERT INTO accounts(profile_id,firebase_uid,email,created,google_linked) VALUES(?,?,?,?,1)", (a, "synthetic-firebase-uid", "migration@example.invalid", now))
                     db.execute("INSERT INTO sessions(token_hash,profile_id,created,expires,verified_at) VALUES(?,?,?,?,?)", ("c" * 64, a, now, now + 3600, now))
+                    db.execute("INSERT INTO session_devices(token_hash,label) VALUES(?,?)", ("c" * 64, "Fixture device"))
+                    db.execute("INSERT INTO message_reactions(message_id,actor_id,emoji) VALUES(?,?,?)", (41, a, "👍"))
                     db.execute("INSERT INTO auth_limits(key,at) VALUES(?,?)", ("synthetic-limit", now))
                     db.execute("INSERT INTO push_tokens(profile_id,token,updated) VALUES(?,?,?)", (b, "synthetic-fcm-token", now))
                     db.execute("INSERT INTO push_jobs(message_id,state,attempts,next_at,last_error) VALUES(41,'sent',1,0,NULL)")
@@ -41,7 +44,10 @@ class PostgresMigrationRehearsalTests(unittest.TestCase):
             self.assertEqual(set(report), set(TABLES))
             self.assertEqual(report["profiles"]["rows"], 2)
             self.assertEqual(report["messages"]["rows"], 1)
+            self.assertEqual(report["message_reactions"]["rows"], 1)
+            self.assertEqual(report["session_devices"]["rows"], 1)
             with psycopg.connect(os.environ["SALOM_PG_TEST_DSN"]) as pg:
+                self.assertEqual(pg.execute("SELECT about FROM profiles WHERE id=%s", (a,)).fetchone()[0], "Салом из теста")
                 next_id = pg.execute(
                     "INSERT INTO messages(sender_id,recipient_id,client_id,text,created) VALUES(%s,%s,%s,%s,%s) RETURNING id",
                     (a, b, str(uuid.uuid4()), "sequence check", now)

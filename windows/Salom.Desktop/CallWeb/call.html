@@ -2,14 +2,380 @@
 <html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Звонок Салом</title>
 <style>
-:root{color-scheme:dark;font:16px Segoe UI,Arial;background:#11161d;color:#edf1f5}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;flex-direction:column;background:radial-gradient(ellipse at 50% 15%,#263747,#11161d 65%)}
-header{padding:20px;text-align:center;font-size:20px;font-weight:650}.video{position:relative;flex:1;min-height:340px;margin:0 14px 14px;border-radius:20px;overflow:hidden;background:#19212b;display:grid;place-items:center}video{width:100%;height:100%;object-fit:cover}.remote{position:absolute;inset:0}.local{position:absolute;right:12px;bottom:12px;width:29%;height:24%;min-width:100px;min-height:110px;border:2px solid #ffc400;border-radius:14px;background:#10151b}.avatar{color:#ffc400;font-size:64px}.controls{display:flex;justify-content:center;gap:14px;padding:18px 10px 26px}.controls button{border:0;border-radius:50%;width:56px;height:56px;background:#293544;color:white;display:grid;place-items:center;cursor:pointer}.controls button svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.controls button.off{background:#485260;color:#aeb9c4}.controls .end{background:#d94048}.controls .end svg{transform:rotate(135deg)}.hint{text-align:center;color:#9ba8b7;margin:-12px 0 12px;font-size:13px}
+:root{color-scheme:dark;font:16px "Segoe UI",Arial,sans-serif;background:#141217;color:#faf8fc}
+*{box-sizing:border-box}
+body{margin:0}
+.stage{position:fixed;inset:0;overflow:hidden;isolation:isolate;background:radial-gradient(ellipse at 50% 25%,#302631,#151218 65%)}
+.remote{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.avatar{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:clamp(92px,28vmin,152px);aspect-ratio:1;display:grid;place-items:center;border-radius:50%;background:#392d3a;border:1px solid #584557;color:#ffc400;font-size:clamp(34px,12vmin,60px);font-weight:650;user-select:none}
+.tap{position:absolute;inset:0;background:none;border:0;padding:0;color:inherit}
+.tap:focus-visible{outline:2px solid #ffc400;outline-offset:-4px}
+.shade{position:absolute;inset:0;background:linear-gradient(#101017d9,transparent 31%,transparent 67%,#101017e4);pointer-events:none}
+header{position:absolute;top:0;left:0;right:0;text-align:center;padding:clamp(12px,4vh,30px) 18px 0;pointer-events:none;text-shadow:0 1px 8px #0009}
+h1{margin:0;font-size:clamp(19px,5vmin,31px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+time{display:block;margin-top:3px;color:#ffcc33;font-variant-numeric:tabular-nums}
+.hint{margin:4px 0 0;color:#e8e3eb;font-size:13px}
+.preview{position:absolute;top:0;left:0;width:clamp(76px,26vmin,155px);height:clamp(58px,25vh,160px);border:1px solid #ffffff69;border-radius:14px;overflow:hidden;background:#17151a;box-shadow:0 3px 14px #0007;cursor:grab;touch-action:none}
+.preview.dragging{cursor:grabbing}
+.local{width:100%;height:100%;display:block;object-fit:cover;transform:scaleX(-1);pointer-events:none}
+.controls{position:absolute;bottom:clamp(10px,3vh,22px);left:50%;transform:translateX(-50%);display:flex;gap:clamp(6px,2vw,12px);padding:6px;border-radius:999px;background:#26232ae6}
+.controls button{display:grid;place-items:center;border:none;border-radius:50%;width:clamp(40px,12vmin,50px);aspect-ratio:1;background:#403940;color:#fff;cursor:pointer}
+.controls button:hover,.controls button:focus-visible{outline:2px solid #ffcd3a;outline-offset:1px}
+.controls button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.controls .off{background:#ffc400;color:#19161a}
+.controls .end{background:#c83448}
+.controls .end svg{transform:rotate(135deg)}
+.controls button:disabled{opacity:.55;cursor:default}
+.quiet .shade,.quiet .controls,.quiet h1,.quiet time{display:none}
+.quiet .hint:not(.important){display:none}
+[hidden]{display:none!important}
 </style>
-<header>САЛОМ · ЗВОНОК</header><main class="video"><div class="avatar" id="avatar">С</div><video class="remote" id="remote" autoplay playsinline></video><video class="local" id="local" autoplay playsinline muted></video></main><div class="hint" id="hint">Запрашиваем доступ к микрофону и камере…</div><nav class="controls"><button id="mute" title="Микрофон" aria-label="Микрофон"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></button><button id="camera" title="Камера" aria-label="Камера"><svg viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg></button><button id="end" class="end" title="Завершить" aria-label="Завершить"><svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7l.5 3a2 2 0 0 1-.6 1.8L7.1 10a16 16 0 0 0 6.9 6.9l1.5-1.9a2 2 0 0 1 1.8-.6l3 .5a2 2 0 0 1 1.7 2z"/></svg></button></nav>
+<main class="stage" id="stage">
+  <video class="remote" id="remote" autoplay playsinline muted hidden></video>
+  <audio id="remote-audio" autoplay></audio>
+  <div class="avatar" id="avatar" aria-hidden="true">С</div>
+  <button type="button" class="tap" id="toggle-controls" aria-label="Скрыть управление" tabindex="-1" disabled></button>
+  <div class="shade"></div>
+  <header aria-live="polite"><h1 id="name">Салом</h1><time id="duration" hidden></time><p id="hint" class="hint">Подключение…</p></header>
+  <div class="preview" id="preview" hidden><video class="local" id="local" autoplay playsinline muted aria-label="Своё видео"></video></div>
+  <nav class="controls" aria-label="Управление звонком">
+    <button id="mute" title="Микрофон" aria-label="Микрофон" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></button>
+    <button id="camera" title="Камера" aria-label="Камера выключена" aria-pressed="false" hidden><svg viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg></button>
+    <button id="speaker" title="Переключить устройство вывода" aria-label="Переключить устройство вывода" hidden><svg viewBox="0 0 24 24"><path d="M3 9h4l5-4v14l-5-4H3zM16 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/></svg></button>
+    <button id="switch-camera" title="Сменить камеру" aria-label="Сменить камеру" hidden><svg viewBox="0 0 24 24"><path d="M3 6h5l2-3h4l2 3h5v14H3zM8 13a4 4 0 0 1 7-3l2 2m0-3v3h-3m2 1a4 4 0 0 1-7 3l-2-2m0 3v-3h3"/></svg></button>
+    <button id="end" class="end" title="Завершить" aria-label="Завершить"><svg viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7l.5 3a2 2 0 0 1-.6 1.8L7.1 10a16 16 0 0 0 6.9 6.9l1.5-1.9a2 2 0 0 1 1.8-.6l3 .5a2 2 0 0 1 1.7 2z"/></svg></button>
+  </nav>
+</main>
 <script>
-let pc,localStream,started=false,remoteReady=false,pending=[];const $=id=>document.getElementById(id);const send=m=>window.chrome.webview.postMessage(m);const setState=value=>send({type:'state',value});
-async function salomStart(iceJson,isCaller){if(started)return;started=true;try{const ice=JSON.parse(iceJson);pc=new RTCPeerConnection({iceServers:ice});pc.onicecandidate=e=>{if(e.candidate)send({type:'signal',kind:'ice',payload:{sdp_mid:e.candidate.sdpMid,sdp_mline_index:e.candidate.sdpMLineIndex,candidate:e.candidate.candidate}})};pc.ontrack=e=>{$('remote').srcObject=e.streams[0];$('avatar').hidden=true};pc.onconnectionstatechange=()=>setState(pc.connectionState==='connected'?'connected':pc.connectionState==='failed'?'failed':pc.connectionState);try{localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:true})}catch(_){localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});$('hint').textContent='Звонок без камеры'}$('local').srcObject=localStream;localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));if(isCaller)$('hint').textContent='Ожидание ответа…'}catch(e){send({type:'error',value:e.message});$('hint').textContent='Проверь разрешение микрофона';}}
-async function salomCreateOffer(){try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);send({type:'signal',kind:'offer',payload:{type:offer.type,sdp:offer.sdp}})}catch(e){send({type:'error',value:e.message})}}
-async function salomReceive(raw){try{const {kind,payload}=JSON.parse(raw);if(kind==='offer'){await pc.setRemoteDescription(payload);remoteReady=true;for(const c of pending)await pc.addIceCandidate(c);pending=[];const answer=await pc.createAnswer();await pc.setLocalDescription(answer);send({type:'signal',kind:'answer',payload:{type:answer.type,sdp:answer.sdp}})}else if(kind==='answer'){await pc.setRemoteDescription(payload);remoteReady=true;for(const c of pending)await pc.addIceCandidate(c);pending=[]}else if(kind==='ice'){const c=new RTCIceCandidate({sdpMid:payload.sdp_mid,sdpMLineIndex:payload.sdp_mline_index,candidate:payload.candidate});if(remoteReady)await pc.addIceCandidate(c);else pending.push(c)}}catch(e){send({type:'error',value:e.message})}}
-$('mute').onclick=()=>{const t=localStream?.getAudioTracks()[0];if(t){t.enabled=!t.enabled;$('mute').classList.toggle('off',!t.enabled)}};$('camera').onclick=()=>{const t=localStream?.getVideoTracks()[0];if(t){t.enabled=!t.enabled;$('camera').classList.toggle('off',!t.enabled)}};$('end').onclick=()=>{localStream?.getTracks().forEach(t=>t.stop());pc?.close();send({type:'hangup'})};
+const $ = id => document.getElementById(id);
+const send = message => window.chrome.webview.postMessage(message);
+const audioConstraints = {echoCancellation: true, noiseSuppression: true, autoGainControl: true};
+const videoConstraints = {width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30, max: 30}};
+const remoteAudio = new MediaStream();
+const remoteVideo = new MediaStream();
+let pc, localStream, videoSender;
+let started = false, stopped = false, caller = false, videoMode = false;
+let offered = false, negotiatingOffer = false, wasConnected = false, connectionState = 'new';
+let recoveryTimer, recoveryAttempts = 0, durationTimer, statsTimer, connectedAt = 0;
+let lastRemoteSdp, lastLocalSdp;
+let signaling = Promise.resolve();
+const pending = [];
+let cameras = [], outputs = [], cameraIndex = 0, outputIndex = 0;
+
+function status(text, important = false) {
+    $('hint').textContent = text;
+    $('hint').classList?.toggle('important', important);
+}
+
+async function configureSender(sender, kind) {
+    if (!sender?.getParameters) return;
+    try {
+        const params = sender.getParameters();
+        if (!params.encodings?.length) return;
+        if (kind === 'video') {
+            params.degradationPreference = 'balanced';
+            params.encodings[0].maxBitrate = 2_000_000;
+            params.encodings[0].maxFramerate = 30;
+        } else {
+            params.encodings[0].priority = 'high';
+        }
+        await sender.setParameters(params);
+    } catch (error) {
+        console.warn('SALOM: RTP parameters unavailable', error.name);
+    }
+}
+
+async function salomStart(iceJson, isCaller, video, peerName = 'Салом') {
+    if (started) return;
+    started = true;
+    caller = isCaller;
+    videoMode = video;
+    $('name').textContent = peerName;
+    $('avatar').textContent = peerName.trim().slice(0, 1).toUpperCase() || 'С';
+    $('camera').hidden = !video;
+    $('local').hidden = $('preview').hidden = $('remote').hidden = true;
+    status(video ? 'Подключаем микрофон и камеру…' : 'Подключаем микрофон…');
+    try {
+        pc = new RTCPeerConnection({iceServers: JSON.parse(iceJson)});
+        pc.onicecandidate = ({candidate}) => {
+            if (candidate && !stopped) send({
+                type: 'signal', kind: 'ice', payload: {
+                    sdp_mid: candidate.sdpMid, sdp_mline_index: candidate.sdpMLineIndex, candidate: candidate.candidate
+                }
+            });
+        };
+        $('remote-audio').srcObject = remoteAudio;
+        $('remote').srcObject = remoteVideo;
+        pc.ontrack = ({track}) => {
+            if (track.kind === 'audio') {
+                remoteAudio.addTrack(track);
+                $('remote-audio').play?.().catch(() => {});
+            } else if (video && track.kind === 'video') {
+                remoteVideo.addTrack(track);
+                const showVideo = visible => { $('remote').hidden = !visible; $('avatar').hidden = visible; };
+                track.onunmute = () => showVideo(true);
+                track.onmute = track.onended = () => showVideo(false);
+                showVideo(!track.muted);
+            }
+        };
+        pc.onconnectionstatechange = updateConnection;
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({audio: audioConstraints, video: video ? videoConstraints : false});
+        } catch (problem) {
+            if (!video || stopped) throw problem;
+            localStream = await navigator.mediaDevices.getUserMedia({audio: audioConstraints, video: false});
+        }
+        if (stopped) { localStream.getTracks().forEach(track => track.stop()); return; }
+        const hasVideo = localStream.getVideoTracks().length > 0;
+        $('camera').hidden = !hasVideo;
+        $('local').hidden = $('preview').hidden = !hasVideo;
+        if (hasVideo) $('local').srcObject = localStream;
+        for (const track of localStream.getTracks()) {
+            const sender = pc.addTrack(track, localStream);
+            if (track.kind === 'video') videoSender = sender;
+            await configureSender(sender, track.kind);
+        }
+        if (stopped) return;
+        if (video && !hasVideo && caller) pc.addTransceiver('video', {direction: 'recvonly'});
+        status(video && !hasVideo ? 'Камера недоступна' : caller ? 'Ожидание ответа…' : 'Подключение…');
+        send({type: 'ready'});
+        void refreshDevices();
+        if (hasVideo) placePreview();
+    } catch (error) {
+        if (!stopped) send({type: 'error', value: error.name || 'MediaError'});
+    }
+}
+
+function sendSdp(description) {
+    if (!stopped && description) send({type: 'signal', kind: description.type,
+        payload: {type: description.type, sdp: description.sdp}});
+}
+
+async function salomCreateOffer(restarting = false) {
+    if (!pc || stopped || negotiatingOffer || (offered && !restarting)) return;
+    offered = negotiatingOffer = true;
+    try {
+        const offer = await pc.createOffer(restarting ? {iceRestart: true} : undefined);
+        if (stopped) return;
+        await pc.setLocalDescription(offer);
+        lastLocalSdp = offer;
+        sendSdp(offer);
+    } catch (error) {
+        if (!stopped && !restarting) send({type: 'error', value: error.name});
+    } finally {
+        negotiatingOffer = false;
+    }
+}
+
+async function addRemoteCandidate(ice) {
+    if (stopped) return true;
+    try {
+        await pc.addIceCandidate(ice);
+        return true;
+    } catch (error) {
+        if (!stopped) console.warn('SALOM: ICE candidate rejected', error.name);
+        return false;
+    }
+}
+
+function salomReceive(raw) {
+    signaling = signaling.then(async () => {
+        if (!pc || stopped) return;
+        const {kind, payload} = JSON.parse(raw);
+        if (kind === 'ice') {
+            const ice = {sdpMid: payload.sdp_mid, sdpMLineIndex: payload.sdp_mline_index, candidate: payload.candidate};
+            if ((!lastRemoteSdp || !await addRemoteCandidate(ice)) && pending.length < 128) pending.push(ice);
+            return;
+        }
+        if ((caller ? kind !== 'answer' : kind !== 'offer') || !payload?.sdp) return;
+        if (lastRemoteSdp === payload.sdp) {
+            if (kind === 'offer' && wasConnected && lastLocalSdp?.type === 'answer') sendSdp(lastLocalSdp);
+            return;
+        }
+        if (kind === 'answer' && pc.signalingState !== 'have-local-offer') return;
+        await pc.setRemoteDescription(payload);
+        lastRemoteSdp = payload.sdp;
+        for (const ice of pending.splice(0)) await addRemoteCandidate(ice);
+        if (kind === 'offer' && !stopped) {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            lastLocalSdp = answer;
+            sendSdp(answer);
+        }
+    }).catch(error => {
+        if (!stopped && !wasConnected) send({type: 'error', value: error.name});
+    });
+}
+
+function beginRecovery() {
+    if (!caller || recoveryTimer || stopped || recoveryAttempts >= 3) return;
+    recoveryTimer = setTimeout(async () => {
+        recoveryTimer = undefined;
+        if (stopped || connectionState === 'connected') return;
+        recoveryAttempts++;
+        if (pc.signalingState === 'stable') await salomCreateOffer(true);
+        else if (pc.signalingState === 'have-local-offer') sendSdp(lastLocalSdp);
+        if (connectionState !== 'connected') beginRecovery();
+    }, recoveryAttempts === 0 ? 2500 : 6000);
+}
+
+function updateConnection() {
+    if (stopped) return;
+    const state = pc.connectionState;
+    connectionState = state;
+    if (state === 'connected') {
+        wasConnected = true;
+        clearTimeout(recoveryTimer);
+        recoveryTimer = undefined;
+        recoveryAttempts = 0;
+        status(videoMode ? 'Видеозвонок' : 'Аудиозвонок');
+        if (!connectedAt) {
+            connectedAt = performance.now() || 1;
+            updateDuration();
+            durationTimer = setInterval(updateDuration, 1000);
+        }
+        $('toggle-controls').disabled = !videoMode;
+        $('toggle-controls').tabIndex = videoMode ? 0 : -1;
+        clearTimeout(statsTimer);
+        statsTimer = setTimeout(reportQuality, 2000);
+    } else if (wasConnected && ['disconnected','failed','connecting'].includes(state)) {
+        status('Восстанавливаем соединение…', true);
+        send({type: 'state', value: 'reconnecting'});
+        beginRecovery();
+        return;
+    } else if (state === 'connecting') status('Подключение…');
+    send({type: 'state', value: state});
+}
+
+function updateDuration() {
+    const seconds = Math.max(0, Math.floor((performance.now() - connectedAt) / 1000));
+    $('duration').textContent = [Math.floor(seconds / 60), seconds % 60].map(part => String(part).padStart(2, '0')).join(':');
+    $('duration').hidden = false;
+}
+
+async function reportQuality() {
+    try {
+        const stats = await pc.getStats();
+        if (stopped) return;
+        const transport = [...stats.values()].find(item => item.type === 'transport' && item.selectedCandidatePairId);
+        const pair = stats.get(transport?.selectedCandidatePairId);
+        const video = [...stats.values()].find(item => item.type === 'outbound-rtp' && item.kind === 'video');
+        const codec = stats.get(video?.codecId)?.mimeType;
+        const route = stats.get(pair?.localCandidateId)?.candidateType;
+        send({type: 'quality', value: {
+            codec: codec || null, route: route || null,
+            rtt: Math.round((pair?.currentRoundTripTime ?? 0) * 1000),
+            width: video?.frameWidth ?? 0, height: video?.frameHeight ?? 0, fps: video?.framesPerSecond ?? 0
+        }});
+    } catch { /* Some WebView2 versions expose only part of the statistics. */ }
+}
+
+async function refreshDevices() {
+    if (!navigator.mediaDevices.enumerateDevices || stopped) return;
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (stopped) return;
+        cameras = devices.filter(device => device.kind === 'videoinput' && device.deviceId);
+        cameraIndex = Math.max(0, cameras.findIndex(device => device.deviceId === localStream.getVideoTracks()[0]?.getSettings().deviceId));
+        outputs = devices.filter(device => device.kind === 'audiooutput' && device.deviceId && device.deviceId !== 'communications');
+        $('speaker').hidden = outputs.length < 2 || !$('remote-audio').setSinkId;
+        $('switch-camera').hidden = cameras.length < 2 || !videoSender;
+    } catch { /* Device selection is optional; keep the current capture and output. */ }
+}
+
+let previewX = 1, previewY = 0, drag;
+function previewBounds() {
+    return [Math.max(0, $('stage').clientWidth - $('preview').offsetWidth - 24),
+        Math.max(0, $('stage').clientHeight - $('preview').offsetHeight - 156)];
+}
+function placePreview() {
+    const [x, y] = previewBounds();
+    $('preview').style.transform = 'translate(' + (12 + x * previewX) + 'px,' + (80 + y * previewY) + 'px)';
+}
+$('preview').onpointerdown = event => {
+    const preview = $('preview');
+    preview.setPointerCapture(event.pointerId);
+    preview.classList.add('dragging');
+    drag = {x: event.clientX, y: event.clientY, previewX, previewY};
+};
+$('preview').onpointermove = event => {
+    if (!drag) return;
+    const [x, y] = previewBounds();
+    if (x) previewX = Math.max(0, Math.min(1, drag.previewX + (event.clientX - drag.x) / x));
+    if (y) previewY = Math.max(0, Math.min(1, drag.previewY + (event.clientY - drag.y) / y));
+    placePreview();
+};
+$('preview').onpointerup = $('preview').onpointercancel = $('preview').onlostpointercapture = () => {
+    drag = undefined;
+    $('preview').classList.remove('dragging');
+};
+$('toggle-controls').onclick = () => {
+    const hidden = $('stage').classList.toggle('quiet');
+    $('toggle-controls').setAttribute('aria-label', hidden ? 'Показать управление' : 'Скрыть управление');
+};
+window.addEventListener('resize', () => { if (!$('preview').hidden) placePreview(); });
+$('mute').onclick = () => {
+    const track = localStream?.getAudioTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    $('mute').classList.toggle('off', !track.enabled);
+    $('mute').setAttribute('aria-pressed', String(!track.enabled));
+};
+$('camera').onclick = () => {
+    const track = localStream?.getVideoTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    $('preview').hidden = !track.enabled;
+    $('switch-camera').hidden = !track.enabled || cameras.length < 2;
+    $('camera').classList.toggle('off', !track.enabled);
+    $('camera').setAttribute('aria-pressed', String(!track.enabled));
+    if (track.enabled) placePreview();
+};
+$('switch-camera').onclick = async () => {
+    if (stopped || !videoSender || cameras.length < 2 || $('switch-camera').disabled) return;
+    $('switch-camera').disabled = true;
+    let replacement;
+    try {
+        const next = (cameraIndex + 1) % cameras.length;
+        const stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {...videoConstraints, deviceId: {exact: cameras[next].deviceId}}});
+        replacement = stream.getVideoTracks()[0];
+        if (stopped) return;
+        const old = localStream.getVideoTracks()[0];
+        await videoSender.replaceTrack(replacement);
+        if (stopped) return;
+        localStream.removeTrack(old);
+        localStream.addTrack(replacement);
+        old.stop();
+        cameraIndex = next;
+        replacement = null;
+    } catch {
+        status('Не удалось переключить камеру', true);
+    } finally {
+        replacement?.stop();
+        $('switch-camera').disabled = false;
+    }
+};
+$('speaker').onclick = async () => {
+    if (outputs.length < 2) return;
+    try {
+        const next = (outputIndex + 1) % outputs.length;
+        await $('remote-audio').setSinkId(outputs[next].deviceId);
+        outputIndex = next;
+        $('speaker').title = outputs[next].label || 'Устройство вывода';
+    } catch { status('Не удалось переключить звук', true); }
+};
+
+function salomStop() {
+    if (stopped) return false;
+    stopped = true;
+    clearTimeout(recoveryTimer);
+    clearTimeout(statsTimer);
+    clearInterval(durationTimer);
+    localStream?.getTracks().forEach(track => track.stop());
+    pc?.close();
+    $('local').srcObject = $('remote').srcObject = $('remote-audio').srcObject = null;
+    return true;
+}
+$('end').onclick = () => { if (salomStop()) send({type: 'hangup'}); };
+window.addEventListener('pagehide', salomStop);
 </script></html>

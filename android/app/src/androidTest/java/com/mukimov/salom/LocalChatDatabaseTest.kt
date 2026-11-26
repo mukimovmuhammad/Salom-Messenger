@@ -30,7 +30,7 @@ class LocalChatDatabaseTest {
         val dao = database!!.chatDao()
         val peer = "peer-a"
         val message = CachedMessage(peer, 10, "hello", true, "12:30", "sent", null, null, null, null, false, null)
-        dao.applySync(peer, listOf(message), emptyList(), CachedChatState(peer, 10, 4, 0))
+        dao.applySync(peer, listOf(message), emptyList(), CachedChatState(peer, 10, 4, 0), emptyList())
         val outgoing = CachedOutgoing.create("client-uuid", peer, "queued", 1234, null, 10, "Friend", "hello")
         dao.upsertQueuedMessage(outgoing)
 
@@ -38,10 +38,26 @@ class LocalChatDatabaseTest {
         assertEquals(10L, dao.chatState(peer)?.messageCursor)
         assertEquals(listOf(outgoing), dao.queuedMessages(peer))
 
-        dao.applySync(peer, emptyList(), listOf(10), CachedChatState(peer, 10, 5, 10))
+        dao.applySync(peer, emptyList(), listOf(10), CachedChatState(peer, 10, 5, 10), emptyList())
         dao.deleteQueuedMessage(outgoing.clientId)
         assertTrue(dao.messages(peer).isEmpty())
         assertNull(dao.chatState("another-peer"))
+        assertTrue(dao.queuedMessages(peer).isEmpty())
+    }
+
+    @Test
+    fun httpAndSyncAcknowledgeOneLogicalMessageWithoutLeavingItsQueueEntry() = runBlocking {
+        database = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext<Context>(), LocalChatDatabase::class.java).build()
+        val dao = database!!.chatDao()
+        val peer = "peer-a"
+        val id = "same-client-id"
+        val queued = CachedOutgoing.create(id, peer, "hello", 1234, null, null, null, null)
+        val message = CachedMessage(peer, 42, "hello", true, "12:30", "sent", null, null, null, null, false, null)
+        dao.upsertQueuedMessage(queued)
+        val confirmed = dao.applySync(peer, listOf(message), emptyList(), CachedChatState(peer, 42, 0, 0), listOf(id))
+        assertEquals(listOf(queued), confirmed)
+        dao.confirmOutgoing(peer, message, id)
+        assertEquals(listOf(message), dao.messages(peer))
         assertTrue(dao.queuedMessages(peer).isEmpty())
     }
 
@@ -61,11 +77,17 @@ class LocalChatDatabaseTest {
         }
 
         database = Room.databaseBuilder(context, LocalChatDatabase::class.java, fileName)
-            .addMigrations(LocalChatDatabase.MIGRATION_1_2)
+            .addMigrations(LocalChatDatabase.MIGRATION_1_2, LocalChatDatabase.MIGRATION_2_3)
             .build()
 
         val dao = database!!.chatDao()
-        assertEquals("keep this", dao.messages("peer-a").single().text)
+        val migrated = dao.messages("peer-a").single()
+        assertEquals("keep this", migrated.text)
+        assertNull(migrated.myReaction)
+        dao.upsertMessages(listOf(migrated.copy(myReaction = "👍", peerReaction = "🔥")))
+        val reacted = dao.messages("peer-a").single().toMessage()
+        assertEquals("👍", reacted.myReaction)
+        assertEquals("🔥", reacted.peerReaction)
         assertTrue(dao.queuedMessages("peer-a").isEmpty())
         context.deleteDatabase(fileName)
     }

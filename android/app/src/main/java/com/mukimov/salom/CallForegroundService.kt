@@ -55,12 +55,18 @@ internal class CallForegroundService : Service() {
             putExtra("incoming_call_action", "end")
             this.data = android.net.Uri.parse("salom://call/$callId/end")
         }
-        val pending = PendingIntent.getActivity(this, callId.hashCode(), endIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val openIntent = Intent(endIntent).apply {
+            removeExtra("incoming_call_action")
+            data = android.net.Uri.parse("salom://call/$callId/open")
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val open = PendingIntent.getActivity(this, callId.hashCode(), openIntent, flags)
+        val end = PendingIntent.getActivity(this, callId.hashCode(), endIntent, flags)
         val notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification).setColor(0xFFFFC400.toInt())
             .setContentTitle("Звонок Салом").setContentText(peerName)
             .setCategory(NotificationCompat.CATEGORY_CALL).setOngoing(true).setOnlyAlertOnce(true)
-            .setContentIntent(pending).addAction(0, "Завершить", pending).build()
+            .setContentIntent(open).addAction(0, "Завершить", end).build()
         val cameraAllowed = intent?.getBooleanExtra("with_camera", false) == true &&
             androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
         val type = if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or if (cameraAllowed) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0 else if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0

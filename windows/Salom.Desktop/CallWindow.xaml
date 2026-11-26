@@ -2,11 +2,11 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-        Title="Звонок · Салом" Width="440" Height="660" MinWidth="360" MinHeight="520"
+        Title="Звонок · Салом" Width="540" Height="620" MinWidth="320" MinHeight="320"
         Background="#11161D" Foreground="#EDF1F5" WindowStartupLocation="CenterOwner" Icon="assets/salom.ico">
-    <Grid Margin="14">
-        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <wv2:WebView2 x:Name="CallBrowser" Grid.Row="0"/>
-        <TextBlock x:Name="CallStatus" Grid.Row="1" Text="Подключаю звонок…" Foreground="#FFC400" Margin="8,10" TextAlignment="Center"/>
-    </Grid>
+    <DockPanel>
+        <TextBlock x:Name="CallStatus" DockPanel.Dock="Top" Text="Подключаем звонок…" Foreground="#FFC400"
+                   Margin="10,6" TextAlignment="Center" TextWrapping="Wrap"/>
+        <wv2:WebView2 x:Name="CallBrowser"/>
+    </DockPanel>
 </Window>

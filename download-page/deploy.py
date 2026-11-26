@@ -28,19 +28,32 @@ windows_file = release_input.get('windowsFile')
 windows_size = None
 windows_sha256 = None
 if windows_file:
-    assert isinstance(windows_file, str) and re.fullmatch(r'SALOM-[0-9.]+-(?:AllowCookie|CallFix)-Setup\.exe', windows_file)
+    assert isinstance(windows_file, str) and re.fullmatch(r'SALOM-\d+\.\d+\.\d+-(?:AllowCookie|CallFix|Release)-Setup\.exe', windows_file)
     windows_installer = incoming / windows_file
     assert windows_installer.is_file() and windows_installer.stat().st_size > 1_000_000
     windows_size = windows_installer.stat().st_size
     windows_sha256 = hashlib.sha256(windows_installer.read_bytes()).hexdigest()
+    assert release_input.get('windowsSha256', windows_sha256) == windows_sha256, 'Uploaded installer checksum differs'
+android_variants = []
+for abi, expected in release_input.get('androidVariants', {}).items():
+    assert abi in ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')
+    variant = incoming / f'salom-{version}-{abi}.apk'
+    actual = hashlib.sha256(variant.read_bytes()).hexdigest()
+    assert actual == expected, f'Uploaded APK checksum differs for {abi}'
+    android_variants.append((abi, variant, actual))
 assert (incoming / 'index.html').is_file()
+page_contents = (incoming / 'index.html').read_text(encoding='utf-8')
+page_script = re.search(r'\bsrc="/(site-\d+\.js)"', page_contents)
+release_date = release_input.get('releaseDate')
+if release_date is not None:
+    assert datetime.date.fromisoformat(release_date).isoformat() == release_date
 config = Path('/etc/nginx/sites-available/salom-site.conf')
 page = Path('/var/www/salom-site/index.html')
 assert 'server_name mukimov.site;' in config.read_text()
 assert 'alias /var/www/salom/;' in config.read_text(), 'Nginx must already serve /salom/ from /var/www/salom/'
 assert 'alias /var/www/salom/version.json;' in config.read_text(), 'Nginx must already serve /salom/version.json'
 backup = Path('/var/backups') / ('salom-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
-backup.mkdir(parents=True, exist_ok=False)
+backup.mkdir(mode=0o700, parents=True, exist_ok=False)
 shutil.copy2(config, backup / 'nginx.conf')
 shutil.copy2(page, backup / 'index.html')
 target = Path('/var/www/salom')
@@ -60,35 +73,72 @@ if old_metadata_path.is_file():
     assert version_code >= old_code, 'Published versionCode must never go backwards'
     if version_code == old_code:
         assert version == old_metadata.get('version') and sha256 == old_metadata.get('sha256'), 'A published build is immutable; use a higher versionCode for any new APK'
+    old_artifacts = [
+        old_metadata.get('downloadUrl', '').rsplit('/', 1)[-1],
+        old_metadata.get('windowsFile', ''),
+        *(variant.get('downloadUrl', '').rsplit('/', 1)[-1] for variant in old_metadata.get('androidVariants', [])),
+    ]
+    for filename in set(old_artifacts):
+        if re.fullmatch(r'[A-Za-z0-9._-]+\.(?:apk|exe)', filename) and (target / filename).is_file():
+            shutil.copy2(target / filename, backup / filename)
 if (target / apk.name).exists():
     assert hashlib.sha256((target / apk.name).read_bytes()).hexdigest() == sha256, 'A published version must never change bytes'
+for abi, variant, digest in android_variants:
+    if (target / variant.name).exists():
+        assert hashlib.sha256((target / variant.name).read_bytes()).hexdigest() == digest, f'A published {abi} APK must never change bytes'
+if windows_file and (target / windows_file).exists():
+    assert hashlib.sha256((target / windows_file).read_bytes()).hexdigest() == windows_sha256, 'A published Windows installer must never change bytes'
 for filename in (apk.name, 'salom-latest.apk'):
     temporary = target / (filename + '.tmp')
     shutil.copy2(apk, temporary)
     temporary.chmod(0o644)
     temporary.replace(target / filename)
 if windows_file:
-    if (target / windows_file).exists():
-        assert hashlib.sha256((target / windows_file).read_bytes()).hexdigest() == windows_sha256, 'A published Windows installer must never change bytes'
     temporary = target / (windows_file + '.tmp')
     shutil.copy2(windows_installer, temporary)
     temporary.chmod(0o644)
     temporary.replace(target / windows_file)
+for _, variant, _ in android_variants:
+    temporary = target / (variant.name + '.tmp')
+    shutil.copy2(variant, temporary)
+    temporary.chmod(0o644)
+    temporary.replace(target / variant.name)
 metadata = {'version': version, 'displayName': display_name, 'versionCode': version_code, 'minSdk': min_sdk, 'downloadUrl': 'https://mukimov.site/salom/' + apk.name, 'size': apk.stat().st_size, 'sha256': sha256,
             'releaseNotes': release_notes}
+if release_date:
+    metadata['releaseDate'] = release_date
 if windows_file:
     metadata.update({'windowsFile': windows_file, 'windowsSize': windows_size, 'windowsSha256': windows_sha256})
 else:
     for key in ('windowsFile', 'windowsSize', 'windowsSha256'):
         if key in old_metadata:
             metadata[key] = old_metadata[key]
+if android_variants:
+    metadata['androidVariants'] = [
+        {'abi': abi, 'downloadUrl': 'https://mukimov.site/salom/' + variant.name,
+         'size': variant.stat().st_size, 'sha256': digest}
+        for abi, variant, digest in android_variants
+    ]
 for file in target.iterdir():
     if file.is_file(): file.chmod(0o644)
 try:
     subprocess.run(['nginx', '-t'], check=True)
-    shutil.copy2(incoming / 'index.html', page)
-    page.chmod(0o644)
-    subprocess.run(['systemctl', 'reload', 'nginx'], check=True)
+    if page_script:
+        asset = page.with_name(page_script[1])
+        source = incoming / page_script[1]
+        if source.is_file():
+            if asset.exists():
+                assert asset.read_bytes() == source.read_bytes(), 'Published versioned website asset is immutable'
+            else:
+                pending_asset = asset.with_suffix('.js.pending')
+                shutil.copy2(source, pending_asset)
+                pending_asset.chmod(0o644)
+                pending_asset.replace(asset)
+        assert asset.is_file(), 'Landing page JavaScript is missing'
+    pending_page = page.with_suffix('.html.pending')
+    shutil.copy2(incoming / 'index.html', pending_page)
+    pending_page.chmod(0o644)
+    pending_page.replace(page)
     # Advertise the release only after its immutable APK URL is live.
     temporary = target / 'version.json.tmp'
     temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n')

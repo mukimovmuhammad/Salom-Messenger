@@ -15,32 +15,39 @@ import psycopg
 
 
 TABLES = {
-    "profiles": ("id", "token_hash", "name", "username", "username_key", "is_active", "created", "updated", "online_at", "typing_to", "typing_at", "avatar_url"),
+    "profiles": ("id", "token_hash", "name", "username", "username_key", "is_active", "created", "updated", "online_at", "typing_to", "typing_at", "avatar_url", "about"),
+    "profile_avatars": ("owner_id", "revision", "jpeg_base64"),
     "registrations": ("ip", "at"),
-    "attachments": ("id", "owner_id", "peer_id", "name", "mime", "size", "created", "ready", "kind", "duration_ms", "waveform"),
+    "attachments": ("id", "owner_id", "peer_id", "name", "mime", "size", "created", "ready", "kind", "duration_ms", "waveform", "sha256"),
     "conversation_clears": ("owner_id", "peer_id", "through_id"),
     "messages": ("id", "sender_id", "recipient_id", "client_id", "text", "created", "delivered_at", "read_at", "reply_to_id", "edited_at", "location_id", "attachment_id"),
+    "message_reactions": ("message_id", "actor_id", "emoji"),
     "message_events": ("id", "message_id", "sender_id", "recipient_id", "owner_id", "kind"),
     "message_hides": ("owner_id", "message_id"),
     "live_locations": ("id", "owner_id", "peer_id", "created", "expires", "latitude", "longitude", "updated", "active"),
     "accounts": ("profile_id", "firebase_uid", "phone", "email", "password_hash", "created", "password_changed", "google_linked"),
+    "email_identities": ("profile_id",),
     "sessions": ("token_hash", "profile_id", "created", "expires", "verified_at"),
+    "session_devices": ("token_hash", "label"),
     # Retain the now-unused legacy table from the live SQLite database for a faithful migration.
     "email_challenges": ("id", "email", "code_hash", "expires", "created", "attempts", "ready", "verified", "ticket_hash", "used"),
     "auth_limits": ("key", "at"),
     "push_tokens": ("profile_id", "token", "updated"),
     "push_jobs": ("message_id", "state", "attempts", "next_at", "last_error"),
-    "call_sessions": ("id", "caller_id", "callee_id", "state", "created", "updated", "expires", "ended_by", "seen_at"),
+    "call_sessions": ("id", "caller_id", "callee_id", "state", "created", "updated", "expires", "ended_by", "seen_at", "media_mode"),
     "call_push_jobs": ("call_id", "state", "attempts", "next_at", "last_error"),
 }
 ORDER_COLUMNS = {
     "profiles": ("id",), "registrations": ("ip", "at"), "attachments": ("id",),
+    "profile_avatars": ("owner_id",), "email_identities": ("profile_id",),
     "conversation_clears": ("owner_id", "peer_id"), "messages": ("id",),
     "message_events": ("id",), "message_hides": ("owner_id", "message_id"),
     "live_locations": ("id",), "accounts": ("profile_id",), "sessions": ("token_hash",), "email_challenges": ("id",),
     "auth_limits": ("key", "at"), "push_tokens": ("profile_id",), "push_jobs": ("message_id",),
     "call_sessions": ("id",), "call_push_jobs": ("call_id",),
+    "message_reactions": ("message_id", "actor_id"), "session_devices": ("token_hash",),
 }
+LEGACY_DEFAULTS = {"profiles": {"about": "''"}, "attachments": {"sha256": "NULL"}, "call_sessions": {"media_mode": "'audio'"}}
 
 DDL = """
 CREATE TABLE profiles (
@@ -48,8 +55,13 @@ CREATE TABLE profiles (
   username TEXT, username_key TEXT UNIQUE, is_active SMALLINT NOT NULL DEFAULT 1,
   created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL,
   online_at DOUBLE PRECISION NOT NULL DEFAULT 0, typing_to TEXT,
-  typing_at DOUBLE PRECISION NOT NULL DEFAULT 0, avatar_url TEXT
+  typing_at DOUBLE PRECISION NOT NULL DEFAULT 0, avatar_url TEXT, about TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE profile_avatars (
+  owner_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL, jpeg_base64 TEXT NOT NULL
+);
+CREATE TABLE email_identities (profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE);
 CREATE TABLE registrations (ip TEXT NOT NULL, at DOUBLE PRECISION NOT NULL);
 CREATE TABLE attachments (
   id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -57,7 +69,7 @@ CREATE TABLE attachments (
   name TEXT NOT NULL, mime TEXT NOT NULL, size BIGINT NOT NULL,
   created DOUBLE PRECISION NOT NULL, ready SMALLINT NOT NULL DEFAULT 0,
   kind TEXT NOT NULL DEFAULT 'file', duration_ms BIGINT NOT NULL DEFAULT 0,
-  waveform TEXT NOT NULL DEFAULT '[]'
+  waveform TEXT NOT NULL DEFAULT '[]', sha256 TEXT
 );
 CREATE TABLE conversation_clears (
   owner_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -96,6 +108,15 @@ CREATE TABLE sessions (
   created DOUBLE PRECISION NOT NULL, expires DOUBLE PRECISION NOT NULL,
   verified_at DOUBLE PRECISION NOT NULL
 );
+CREATE TABLE session_devices (
+  token_hash TEXT PRIMARY KEY REFERENCES sessions(token_hash) ON DELETE CASCADE,
+  label TEXT NOT NULL
+);
+CREATE TABLE message_reactions (
+  message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  actor_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL, PRIMARY KEY(message_id, actor_id)
+);
 CREATE TABLE email_challenges (
   id TEXT PRIMARY KEY, email TEXT NOT NULL, code_hash TEXT NOT NULL,
   expires DOUBLE PRECISION NOT NULL, created DOUBLE PRECISION NOT NULL,
@@ -116,7 +137,8 @@ CREATE TABLE call_sessions (
   id TEXT PRIMARY KEY, caller_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   callee_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   state TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL,
-  expires DOUBLE PRECISION NOT NULL, ended_by TEXT, seen_at DOUBLE PRECISION
+  expires DOUBLE PRECISION NOT NULL, ended_by TEXT, seen_at DOUBLE PRECISION,
+  media_mode TEXT NOT NULL DEFAULT 'audio'
 );
 CREATE TABLE call_push_jobs (
   call_id TEXT PRIMARY KEY REFERENCES call_sessions(id) ON DELETE CASCADE,
@@ -140,7 +162,7 @@ CREATE INDEX call_push_jobs_pending ON call_push_jobs(state,next_at);
 def digest_rows(cursor):
     digest = hashlib.sha256()
     count = 0
-    while rows := cursor.fetchmany(1000):
+    while cursor is not None and (rows := cursor.fetchmany(1000)):
         for row in rows:
             digest.update(json.dumps(row, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
             digest.update(b"\n")
@@ -162,7 +184,8 @@ def validate_source(path: Path):
         raise ValueError(f"SQLite integrity check failed: {integrity}")
     found_tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     expected_tables = set(TABLES)
-    optional_tables = {"call_sessions", "call_push_jobs"}
+    optional_tables = {"call_sessions", "call_push_jobs", "profile_avatars", "email_identities",
+                       "message_reactions", "session_devices"}
     if found_tables - expected_tables or expected_tables - found_tables - optional_tables:
         db.close()
         raise ValueError("Unexpected SQLite table set; refusing to omit or invent user data")
@@ -173,10 +196,20 @@ def validate_source(path: Path):
         if table not in found_tables:
             continue
         found = tuple(row[1] for row in db.execute(f"PRAGMA table_info({table})"))
-        if set(found) != set(columns):
+        if set(found) - set(columns) or set(columns) - set(found) - LEGACY_DEFAULTS.get(table, {}).keys():
             db.close()
             raise ValueError(f"Unexpected SQLite columns for {table}; refusing to omit or invent fields")
     return db, found_tables
+
+
+def read_source_table(db, present_tables, table):
+    if table not in present_tables:
+        return None
+    found = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+    defaults = LEGACY_DEFAULTS.get(table, {})
+    projection = ",".join(f'"{name}"' if name in found else defaults[name] for name in TABLES[table])
+    ordering = ",".join(f'"{name}"' for name in ORDER_COLUMNS[table])
+    return db.execute(f'SELECT {projection} FROM "{table}" ORDER BY {ordering}')
 
 
 def migrate(source_path: Path, dsn: str):
@@ -195,8 +228,7 @@ def migrate(source_path: Path, dsn: str):
                     target.execute(statement)
             for table, columns in TABLES.items():
                 quoted_columns = ",".join(f'"{name}"' for name in columns)
-                ordering = ",".join(f'"{name}"' for name in ORDER_COLUMNS[table])
-                source_cursor = source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}') if table in source_tables else None
+                source_cursor = read_source_table(source, source_tables, table)
                 insert = f'INSERT INTO "{table}" ({quoted_columns}) VALUES ({",".join("%s" for _ in columns)})'
                 while source_cursor is not None and (rows := source_cursor.fetchmany(1000)):
                     with target.cursor() as cursor:
@@ -211,7 +243,7 @@ def migrate(source_path: Path, dsn: str):
             for table, columns in TABLES.items():
                 quoted_columns = ",".join(f'"{name}"' for name in columns)
                 ordering = ",".join(f'"{name}"' for name in ORDER_COLUMNS[table])
-                source_result = digest_rows(source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}')) if table in source_tables else (0, hashlib.sha256().hexdigest())
+                source_result = digest_rows(read_source_table(source, source_tables, table))
                 target_result = digest_rows(target.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}'))
                 if source_result != target_result:
                     raise ValueError(f"Count/checksum mismatch for {table}")

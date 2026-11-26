@@ -1,0 +1,17 @@
+<Window x:Class="Salom.Desktop.IncomingCallPrompt"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Входящий звонок · Салом" Background="#151C24" Foreground="#EDF1F5"
+        Width="365" SizeToContent="Height" ResizeMode="NoResize" Topmost="True"
+        WindowStartupLocation="CenterScreen" Icon="assets/salom.ico">
+    <StackPanel Margin="22">
+        <TextBlock x:Name="CallKind" Foreground="#FFC400" FontSize="13"/>
+        <TextBlock x:Name="CallName" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,0"/>
+        <TextBlock x:Name="CallPermission" Foreground="#B5C3D1" Margin="0,6,0,18" TextWrapping="Wrap"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Отклонить" IsCancel="True" MinWidth="110" Padding="10,8"/>
+            <Button Content="Ответить" IsDefault="True" MinWidth="110" Padding="10,8" Margin="8,0,0,0"
+                    Background="#FFC400" Click="Accept_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

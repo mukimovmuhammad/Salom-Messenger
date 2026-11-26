@@ -12,7 +12,7 @@ import sys
 
 import psycopg
 
-from migrate_sqlite_to_postgres import DDL, ORDER_COLUMNS, TABLES, digest_rows, validate_source
+from migrate_sqlite_to_postgres import DDL, ORDER_COLUMNS, TABLES, digest_rows, read_source_table, validate_source
 
 
 PRODUCTION_DATABASE = "salom_prod"
@@ -24,7 +24,7 @@ def validate_target_name(actual_name: str, confirmation: str) -> None:
 
 
 def migrate(source_path: Path, dsn: str, confirmation: str) -> dict[str, dict[str, object]]:
-    source, _source_tables = validate_source(source_path)
+    source, source_tables = validate_source(source_path)
     target = None
     try:
         target = psycopg.connect(dsn, autocommit=True)
@@ -45,10 +45,9 @@ def migrate(source_path: Path, dsn: str, confirmation: str) -> dict[str, dict[st
 
             for table, columns in TABLES.items():
                 quoted_columns = ",".join(f'"{name}"' for name in columns)
-                ordering = ",".join(f'"{name}"' for name in ORDER_COLUMNS[table])
-                cursor = source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}')
+                cursor = read_source_table(source, source_tables, table)
                 insert = f'INSERT INTO "{table}" ({quoted_columns}) VALUES ({",".join("%s" for _ in columns)})'
-                while rows := cursor.fetchmany(500):
+                while cursor is not None and (rows := cursor.fetchmany(500)):
                     with target.cursor() as target_cursor:
                         target_cursor.executemany(insert, rows)
 
@@ -61,7 +60,7 @@ def migrate(source_path: Path, dsn: str, confirmation: str) -> dict[str, dict[st
             for table, columns in TABLES.items():
                 quoted_columns = ",".join(f'"{name}"' for name in columns)
                 ordering = ",".join(f'"{name}"' for name in ORDER_COLUMNS[table])
-                source_result = digest_rows(source.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}'))
+                source_result = digest_rows(read_source_table(source, source_tables, table))
                 target_result = digest_rows(target.execute(f'SELECT {quoted_columns} FROM "{table}" ORDER BY {ordering}'))
                 if source_result != target_result:
                     raise ValueError(f"Count/checksum mismatch in {table}")

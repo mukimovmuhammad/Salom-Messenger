@@ -19,10 +19,8 @@ internal fun UpdateCard(updater: AppUpdater) {
     val status by updater.status.collectAsState()
     val downloadError by updater.downloadError.collectAsState()
     LaunchedEffect(updater) { updater.check(force = true) }
-    Card(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Обновление Салома", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Установлена версия ${updater.installedDisplayVersion}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             when (val value = status) {
                 UpdateStatus.Unchecked, UpdateStatus.Checking -> Row(verticalAlignment = Alignment.CenterVertically) {

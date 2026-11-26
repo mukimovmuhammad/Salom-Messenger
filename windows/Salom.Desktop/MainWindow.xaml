@@ -6,9 +6,49 @@
         xmlns:local="clr-namespace:Salom.Desktop"
         mc:Ignorable="d"
         Title="Салом" Height="760" Width="1180" MinHeight="560" MinWidth="820"
-        Background="#11161D" Foreground="#EDF1F5" WindowStartupLocation="CenterScreen" Icon="assets/salom.ico">
+        Background="#11161D" Foreground="#EDF1F5" WindowStartupLocation="CenterScreen" WindowState="Maximized" Icon="assets/salom.ico">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolVisibility" />
+        <ContextMenu x:Key="MessageActions" x:Shared="False"
+                     DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Копировать" Click="CopyMessage_Click">
+                <MenuItem.Style>
+                    <Style TargetType="MenuItem">
+                        <Style.Triggers><DataTrigger Binding="{Binding HasPhoto}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
+                    </Style>
+                </MenuItem.Style>
+            </MenuItem>
+            <MenuItem Header="Копировать изображение" Click="CopyPhoto_Click"
+                      Visibility="{Binding HasPhoto, Converter={StaticResource BoolVisibility}}"/>
+            <MenuItem Header="Копировать имя файла" Click="CopyAttachmentName_Click"
+                      Visibility="{Binding HasPhoto, Converter={StaticResource BoolVisibility}}"/>
+            <MenuItem Header="Сохранить как…" Click="SaveMessagePhoto_Click"
+                      Visibility="{Binding HasPhoto, Converter={StaticResource BoolVisibility}}"/>
+            <MenuItem Header="Ответить" Click="Reply_Click"/>
+            <MenuItem Header="Поставить реакцию">
+                <MenuItem Header="👍" Tag="👍" Click="Reaction_Click"/>
+                <MenuItem Header="❤️" Tag="❤️" Click="Reaction_Click"/>
+                <MenuItem Header="😂" Tag="😂" Click="Reaction_Click"/>
+                <MenuItem Header="😮" Tag="😮" Click="Reaction_Click"/>
+                <MenuItem Header="😢" Tag="😢" Click="Reaction_Click"/>
+                <MenuItem Header="🔥" Tag="🔥" Click="Reaction_Click"/>
+                <MenuItem Header="Убрать мою реакцию" Click="Reaction_Click"/>
+            </MenuItem>
+            <MenuItem Header="Перейти к исходному сообщению" Click="JumpToQuote_Click"
+                      Visibility="{Binding HasReply, Converter={StaticResource BoolVisibility}}"/>
+            <MenuItem Header="Редактировать" Click="EditMessage_Click"
+                      Visibility="{Binding CanEdit, Converter={StaticResource BoolVisibility}}"/>
+            <Separator/>
+            <MenuItem Header="Удалить">
+                <MenuItem Header="У себя" Tag="me" Click="DeleteMessage_Click"/>
+                <MenuItem Header="У всех" Tag="everyone" Click="DeleteMessage_Click"
+                          Visibility="{Binding IsMine, Converter={StaticResource BoolVisibility}}"/>
+            </MenuItem>
+        </ContextMenu>
+        <ContextMenu x:Key="OutgoingActions" x:Shared="False"
+                     DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Повторить отправку" Click="RetryOutgoing_Click"/>
+        </ContextMenu>
         <SolidColorBrush x:Key="Accent" Color="#FFC400" />
         <SolidColorBrush x:Key="Muted" Color="#9BA8B7" />
         <Style TargetType="Button">
@@ -18,14 +58,31 @@
             <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" /></Border></ControlTemplate></Setter.Value></Setter>
         </Style>
         <Style TargetType="TextBox"><Setter Property="Foreground" Value="#EDF1F5" /><Setter Property="Background" Value="#222C38" /><Setter Property="BorderThickness" Value="0" /><Setter Property="Padding" Value="14,11" /><Setter Property="FontSize" Value="14" /><Setter Property="CaretBrush" Value="#FFC400" /></Style>
-        <Style TargetType="ListBox"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" /></Style>
+        <Style TargetType="ListBox"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Hidden" /></Style>
     </Window.Resources>
     <Grid>
         <Grid x:Name="Workspace" Visibility="Collapsed">
             <Grid.ColumnDefinitions><ColumnDefinition Width="340" MinWidth="270"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Border Grid.Column="0" Background="#151C24" BorderBrush="#27313D" BorderThickness="0,0,1,0"><DockPanel Margin="16">
                 <StackPanel DockPanel.Dock="Top">
-                    <DockPanel Margin="2,2,2,18"><TextBlock Text="Салом" FontSize="25" FontWeight="Bold" VerticalAlignment="Center"/><Button x:Name="SignOutButton" Content="Выйти" Padding="12,8" Background="#2B3643" Foreground="#D5DEE8" DockPanel.Dock="Right" Click="SignOut_Click"/></DockPanel>
+                    <DockPanel Margin="2,2,2,18">
+                        <Button DockPanel.Dock="Right" Width="36" Height="36" Padding="0" Background="#26323F"
+                                Click="AccountMenu_Click" ToolTip="Аккаунт" AutomationProperties.Name="Меню аккаунта">
+                            <Viewbox Width="18" Height="18"><Path Stroke="#EDF1F5" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                Data="M12,3 A4,4 0 1 1 11.99,3 Z M4,21 V19 C4,13 20,13 20,19 V21"/></Viewbox>
+                            <Button.ContextMenu>
+                                <ContextMenu Placement="Bottom">
+                                    <MenuItem Header="Выйти из аккаунта" Click="SignOut_Click">
+                                        <MenuItem.Icon><Path Width="14" Height="14" Stretch="Uniform" StrokeThickness="1.5" Stroke="#727982"
+                                            Data="M10,3 H3 V21 H10 M8,12 H21 M16,7 L21,12 16,17"/></MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
+                        <Button DockPanel.Dock="Right" Content="Обновить" Height="36" Padding="10,0" Margin="0,0,8,0"
+                                Click="Update_Click" ToolTip="Проверить обновления Салома"/>
+                        <TextBlock Text="Салом" FontSize="25" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
                     <Border Background="#202A35" CornerRadius="14" Margin="0,0,0,10"><TextBox x:Name="SearchBox" Background="Transparent" Text="Поиск по @username" Foreground="#9BA8B7" GotFocus="Search_GotFocus" LostFocus="Search_LostFocus" KeyDown="Search_KeyDown"/></Border>
                     <Button x:Name="SearchButton" Content="Найти человека" HorizontalAlignment="Stretch" Margin="0,0,0,18" Click="Search_Click"/>
                     <TextBlock Text="ЧАТЫ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="4,0,0,8"/>
@@ -33,15 +90,109 @@
                 <ListBox x:Name="ChatsList" SelectionChanged="ChatsList_SelectionChanged"><ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="ItemBorder" Background="Transparent" CornerRadius="13"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="ItemBorder" Property="Background" Value="#293544"/></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ItemBorder" Property="Background" Value="#222D3A"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle><ListBox.ItemTemplate><DataTemplate>
                     <Border Padding="10" Margin="0,2" CornerRadius="13"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="48"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <Border Width="40" Height="40" CornerRadius="20" Background="#FFC400" VerticalAlignment="Center"><TextBlock Text="{Binding Initial}" Foreground="#18202A" FontWeight="Bold" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <StackPanel Grid.Column="1" Margin="11,2,0,2" VerticalAlignment="Center"><TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Preview}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
+                        <StackPanel Grid.Column="1" Margin="11,2,0,2" VerticalAlignment="Center"><TextBlock Text="{Binding Name}" Foreground="#EDF1F5" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Preview}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
                         <Border Grid.Column="2" Background="#FFC400" CornerRadius="12" MinWidth="24" Height="24" Padding="5,0" VerticalAlignment="Center" Visibility="{Binding UnreadVisibility}"><TextBlock Text="{Binding UnreadLabel}" Foreground="#11161D" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
                     </Grid></Border>
                 </DataTemplate></ListBox.ItemTemplate></ListBox>
             </DockPanel></Border>
             <Grid Grid.Column="1" x:Name="ChatPane"><Grid.RowDefinitions><RowDefinition Height="74"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <Border Grid.Row="0" Background="#151C24" BorderBrush="#27313D" BorderThickness="0,0,0,1" Padding="22,12"><DockPanel><StackPanel VerticalAlignment="Center"><TextBlock x:Name="PeerName" Text="Выберите чат" FontSize="17" FontWeight="SemiBold"/><TextBlock x:Name="PeerUsername" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,3,0,0"/></StackPanel><StackPanel Orientation="Horizontal" DockPanel.Dock="Right"><Button x:Name="CallButton" Padding="12,8" Margin="0,0,12,0" Click="Call_Click" ToolTip="Аудио- и видеозвонок"><StackPanel Orientation="Horizontal"><Viewbox Width="18" Height="18"><Path Stroke="#11161D" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M22,16.9 L22,19.9 C22,21 21,22 19.8,21.9 C16.7,21.6 13.8,20.5 11.2,18.8 C8.7,17.2 6.8,15.3 5.2,12.8 C3.5,10.2 2.4,7.3 2.1,4.2 C2,3 3,2 4.1,2 L7.1,2 C8.1,2 8.9,2.7 9.1,3.7 L9.6,6.7 C9.7,7.4 9.5,8 9,8.5 L7.1,10 C8.7,13.1 10.9,15.3 14,16.9 L15.5,15 C16,14.5 16.6,14.3 17.3,14.4 L20.3,14.9 C21.3,15.1 22,15.9 22,16.9 Z"/></Viewbox><TextBlock Text="Звонок" Margin="8,0,0,0" VerticalAlignment="Center"/></StackPanel></Button><TextBlock x:Name="ConnectionState" Text="●  локально" Foreground="#9BA8B7" VerticalAlignment="Center"/></StackPanel></DockPanel></Border>
-                <ScrollViewer Grid.Row="1" x:Name="MessagesScroll" VerticalScrollBarVisibility="Auto" Padding="24,20"><ItemsControl x:Name="MessagesList"><ItemsControl.ItemTemplate><DataTemplate><Border Background="{Binding BubbleBrush}" CornerRadius="15" Padding="14,10" Margin="0,4" MaxWidth="600" HorizontalAlignment="{Binding Alignment}"><StackPanel><TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="14"/><Button Content="{Binding AttachmentName}" Tag="{Binding}" Visibility="{Binding HasAttachment, Converter={StaticResource BoolVisibility}}" HorizontalAlignment="Left" Background="#334353" Foreground="#EDF1F5" Padding="8,5" Margin="0,5,0,0" Click="DownloadAttachment_Click"/><TextBlock Text="{Binding TimeLabel}" Foreground="#AAB5C2" FontSize="10" HorizontalAlignment="Right" Margin="12,6,0,0"/></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></ScrollViewer>
-                <Border Grid.Row="2" Background="#151C24" Padding="12" BorderBrush="#27313D" BorderThickness="0,1,0,0"><Border Background="#222C38" CornerRadius="22" BorderBrush="#374656" BorderThickness="1" Padding="6,4"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="MessageBox" Background="Transparent" VerticalContentAlignment="Center" MinHeight="38" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxHeight="140" Padding="12,7" KeyDown="MessageBox_KeyDown"/><Button Grid.Column="1" x:Name="FileButton" Content="Файл" Margin="6,0,0,0" Background="#334353" Foreground="#EDF1F5" Click="File_Click"/><Button Grid.Column="2" x:Name="SendButton" Width="40" Height="40" Padding="10" Margin="6,0,0,0" ToolTip="Отправить · Enter" Click="Send_Click"><Viewbox><Path Stroke="#11161D" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M22,2 L15,22 L11,13 L2,9 Z M22,2 L11,13"/></Viewbox></Button></Grid></Border></Border>
+                <Border Grid.Row="0" Background="#151C24" BorderBrush="#27313D" BorderThickness="0,0,0,1" Padding="18,8"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel VerticalAlignment="Center" Margin="0,0,14,0"><TextBlock x:Name="PeerName" Text="Выберите чат" FontSize="17" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock x:Name="PeerUsername" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock x:Name="ConnectionState" Text="●  локально" Foreground="#9BA8B7" VerticalAlignment="Center" Margin="0,0,10,0"/><Button x:Name="CallButton" Width="38" Height="36" Padding="0" Margin="0,0,6,0" Background="#293544" Click="Call_Click" ToolTip="Аудиозвонок" AutomationProperties.Name="Аудиозвонок"><Viewbox Width="18" Height="18"><Path Stroke="#F0F3F7" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M22,16.9 L22,19.9 C22,21 21,22 19.8,21.9 C16.7,21.6 13.8,20.5 11.2,18.8 C8.7,17.2 6.8,15.3 5.2,12.8 C3.5,10.2 2.4,7.3 2.1,4.2 C2,3 3,2 4.1,2 L7.1,2 C8.1,2 8.9,2.7 9.1,3.7 L9.6,6.7 C9.7,7.4 9.5,8 9,8.5 L7.1,10 C8.7,13.1 10.9,15.3 14,16.9 L15.5,15 C16,14.5 16.6,14.3 17.3,14.4 L20.3,14.9 C21.3,15.1 22,15.9 22,16.9 Z"/></Viewbox></Button><Button x:Name="VideoCallButton" Width="38" Height="36" Padding="0" Background="#293544" Click="Call_Click" ToolTip="Видеозвонок" AutomationProperties.Name="Видеозвонок"><Viewbox Width="18" Height="18"><Path Stroke="#F0F3F7" StrokeThickness="2" StrokeLineJoin="Round" Data="M3,6 H16 V18 H3 Z M16,10 L22,7 V17 L16,14"/></Viewbox></Button><Button Width="38" Height="36" Margin="6,0,0,0" Padding="0" Background="#293544" Foreground="#F0F3F7" FontSize="21" Content="⋯" Click="ChatMenu_Click" AutomationProperties.Name="Меню диалога"><Button.ContextMenu><ContextMenu Placement="Bottom"><MenuItem Header="Очистить диалог у себя" Click="ClearChat_Click"/></ContextMenu></Button.ContextMenu></Button></StackPanel></Grid></Border>
+                <ListBox Grid.Row="1" x:Name="MessagesList" Padding="24,16"
+                         ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                         VirtualizingPanel.ScrollUnit="Pixel">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="Template">
+                                <Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{Binding BubbleBrush}" CornerRadius="15" Padding="14,10" Margin="0,4"
+                                    MaxWidth="600" HorizontalAlignment="{Binding Alignment}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="ContextMenu" Value="{StaticResource MessageActions}"/>
+                                        <Style.Triggers><DataTrigger Binding="{Binding Id}" Value="0">
+                                            <Setter Property="ContextMenu" Value="{StaticResource OutgoingActions}"/>
+                                        </DataTrigger></Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <StackPanel>
+                                    <Border Background="#273442" CornerRadius="5" BorderBrush="#FFC400" BorderThickness="2,0,0,0"
+                                            Padding="8,4" Margin="0,0,0,4" Visibility="{Binding HasReply, Converter={StaticResource BoolVisibility}}">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding ReplyAuthor}" Foreground="#FFC400" FontSize="11"/>
+                                            <TextBlock Text="{Binding ReplyText}" Foreground="#D5DEE8" TextTrimming="CharacterEllipsis" MaxWidth="540"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <local:MessageLinks Body="{Binding Text}"
+                                             Visibility="{Binding HasText, Converter={StaticResource BoolVisibility}}"
+                                             TextWrapping="Wrap" FontSize="14" Foreground="#EDF1F5" Background="Transparent"
+                                             >
+                                        <local:MessageLinks.Style>
+                                            <Style TargetType="local:MessageLinks">
+                                                <Setter Property="ContextMenu" Value="{StaticResource MessageActions}"/>
+                                                <Style.Triggers><DataTrigger Binding="{Binding Id}" Value="0">
+                                                    <Setter Property="ContextMenu" Value="{StaticResource OutgoingActions}"/>
+                                                </DataTrigger></Style.Triggers>
+                                            </Style>
+                                        </local:MessageLinks.Style>
+                                    </local:MessageLinks>
+                                    <Grid>
+                                        <Button Content="{Binding AttachmentName}" Tag="{Binding}"
+                                                HorizontalAlignment="Left" Background="#334353" Foreground="#EDF1F5"
+                                                Padding="8,5" Margin="0,5,0,0" Click="DownloadAttachment_Click">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasFile}" Value="False"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                        <local:PhotoPreview Visibility="{Binding HasPhoto, Converter={StaticResource BoolVisibility}}"/>
+                                        <local:VoiceBubble Visibility="{Binding HasVoice, Converter={StaticResource BoolVisibility}}"/>
+                                    </Grid>
+                                    <TextBlock Text="{Binding ReactionLabel}" Foreground="#EDF1F5" Margin="0,4,0,0"
+                                               Visibility="{Binding HasReactions, Converter={StaticResource BoolVisibility}}"/>
+                                    <TextBlock Text="{Binding TimeLabel}" Foreground="#AAB5C2" FontSize="10"
+                                               HorizontalAlignment="Right" Margin="12,6,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <Border Grid.Row="2" Background="#151C24" Padding="12" BorderBrush="#27313D" BorderThickness="0,1,0,0"><StackPanel><TextBlock x:Name="VoiceRecordingStatus" Visibility="Collapsed" Foreground="#FFC400" Margin="8,0,0,6"/><Border x:Name="ReplyBanner" Visibility="Collapsed" Background="#273442" CornerRadius="8" Padding="9,6" Margin="0,0,0,7"><DockPanel><Button DockPanel.Dock="Right" Width="30" Height="28" Background="#334353" Foreground="#EDF1F5" Content="×" Padding="0" Click="CancelReply_Click" AutomationProperties.Name="Отменить ответ"/><StackPanel Margin="0,0,8,0"><TextBlock x:Name="ReplyLabel" Foreground="#FFC400" FontSize="11"/><TextBlock x:Name="ReplyText" Foreground="#EDF1F5" TextTrimming="CharacterEllipsis"/></StackPanel></DockPanel></Border>
+                    <Border x:Name="ClipboardPhotoBanner" Visibility="Collapsed" Background="#273442"
+                            CornerRadius="12" Padding="8" Margin="0,0,0,7">
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Left" Width="62" Height="48" Background="#17212B" CornerRadius="6" Margin="0,0,10,0">
+                                <Image x:Name="ClipboardPhotoImage" Stretch="Uniform" AutomationProperties.Name="Предпросмотр фото"/>
+                            </Border>
+                            <Button DockPanel.Dock="Right" Width="34" Height="34" Padding="0" Background="#334353" Foreground="#EDF1F5"
+                                    Content="×" Click="RemoveClipboardPhoto_Click" AutomationProperties.Name="Убрать фото"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Фото из буфера" FontWeight="SemiBold"/>
+                                <TextBlock Text="Можно добавить подпись" Foreground="#BDCAD7" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Background="#222C38" CornerRadius="22" BorderBrush="#374656" BorderThickness="1" Padding="6,4"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="MessageBox" Background="Transparent" VerticalContentAlignment="Center" MinHeight="38" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Hidden" MaxHeight="140" Padding="12,7" PreviewKeyDown="MessageBox_KeyDown"/><Button Grid.Column="1" x:Name="FileButton" Content="Файл" Margin="6,0,0,0" Background="#334353" Foreground="#EDF1F5" Click="File_Click"/><Button Grid.Column="2" x:Name="SendButton" Width="40" Height="40" Padding="10" Margin="6,0,0,0" ToolTip="Отправить · Enter" Click="Send_Click"><Viewbox><Path Stroke="#11161D" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M22,2 L15,22 L11,13 L2,9 Z M22,2 L11,13"/></Viewbox></Button>
+<Button Grid.Column="3" x:Name="MicButton" Width="40" Height="40" Padding="10" Margin="6,0,0,0"
+                        Background="#334353" ToolTip="Удерживай для записи · правый клик для выбора микрофона"
+                        AutomationProperties.Name="Удерживай для записи голосового"
+                        PreviewMouseLeftButtonDown="Mic_Down" PreviewMouseLeftButtonUp="Mic_Up"
+                        PreviewMouseMove="Mic_Move" LostMouseCapture="Mic_CaptureLost">
+                        <Viewbox><Path Stroke="#EDF1F5" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                            Data="M9,5 A3,3 0 0 1 15,5 V11 A3,3 0 0 1 9,11 Z M6,10 V11 A6,6 0 0 0 18,11 V10 M12,17 V22 M9,22 H15"/></Viewbox>
+                        <Button.ContextMenu><ContextMenu Opened="MicrophoneMenu_Opened"/></Button.ContextMenu>
+                    </Button></Grid></Border></StackPanel></Border>
             </Grid>
         </Grid>
         <Grid x:Name="LoginPane" Visibility="Visible"><Border Width="440" Padding="36" CornerRadius="24" Background="#19212B" HorizontalAlignment="Center" VerticalAlignment="Center"><StackPanel>

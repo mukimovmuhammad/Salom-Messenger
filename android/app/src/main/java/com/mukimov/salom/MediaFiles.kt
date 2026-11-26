@@ -92,28 +92,28 @@ internal class MediaFiles(private val context: Context, private val directory: D
         source.copyTo(target(result), overwrite = true)
         result
     }
-    suspend fun file(attachment: Attachment): File = withContext(Dispatchers.IO) {
+    suspend fun file(attachment: Attachment, progress: (Float) -> Unit = {}): File = withContext(Dispatchers.IO) {
         lock.withLock {
             val file = target(attachment)
             if (!file.isFile || file.length() != attachment.size) {
                 if (attachment.local) throw DirectoryException("Локальный файл недоступен")
-                if (!photos.restoreChat(attachment, file)) directory.downloadAttachment(attachment, file)
+                if (!photos.restoreChat(attachment, file)) directory.downloadAttachment(attachment, file, progress)
                 trimCache(file)
             }
             file
         }
     }
-    suspend fun bitmap(attachment: Attachment) = withContext(Dispatchers.IO) {
+    suspend fun bitmap(attachment: Attachment, maximumEdge: Int = 1000) = withContext(Dispatchers.IO) {
         val file = file(attachment)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
         var sample = 1
-        while (bounds.outWidth / sample > 1000 || bounds.outHeight / sample > 1000) sample *= 2
+        while (bounds.outWidth / sample > maximumEdge || bounds.outHeight / sample > maximumEdge) sample *= 2
         BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
     suspend fun removeLocal(attachment: Attachment) = withContext(Dispatchers.IO) { target(attachment).delete(); Unit }
-    suspend fun open(attachment: Attachment) {
-        val file = file(attachment)
+    suspend fun open(attachment: Attachment, progress: (Float) -> Unit = {}) {
+        val file = file(attachment, progress)
         val uri = FileProvider.getUriForFile(context, "com.mukimov.salom.updates", file)
         val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, attachment.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             .putExtra(Intent.EXTRA_TITLE, attachment.name).apply { clipData = android.content.ClipData.newRawUri(attachment.name, uri) }

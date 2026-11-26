@@ -17,14 +17,18 @@ class CallSessionManagerTest {
     }
 
     @Test fun acceptIsAtomicAndOnlyOnce() {
+        assertFalse(CallSessionManager.hasActiveCall())
         assertTrue(CallSessionManager.incoming(a))
+        assertTrue(CallSessionManager.hasActiveCall())
         assertTrue(CallSessionManager.accept(a))
         assertFalse(CallSessionManager.accept(a))
         assertEquals(CallSessionManager.State.CONNECTING, CallSessionManager.current(a))
         CallSessionManager.connected(a)
         assertEquals(CallSessionManager.State.CONNECTED, CallSessionManager.current(a))
+        assertTrue(CallSessionManager.hasActiveCall())
         CallSessionManager.end(a)
         assertNull(CallSessionManager.current(a))
+        assertFalse(CallSessionManager.hasActiveCall())
         assertTrue(CallSessionManager.incoming(b))
     }
 

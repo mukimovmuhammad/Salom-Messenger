@@ -41,9 +41,14 @@ def schema(db):
       CREATE TABLE IF NOT EXISTS auth_limits (key TEXT NOT NULL, at REAL NOT NULL);
       CREATE INDEX IF NOT EXISTS auth_limits_key ON auth_limits(key,at);
     ''')
+    db.execute(SESSION_DEVICE_SCHEMA)
     columns = {row[1] for row in db.execute('PRAGMA table_info(accounts)')}
     if 'google_linked' not in columns:
         db.execute('ALTER TABLE accounts ADD COLUMN google_linked INTEGER NOT NULL DEFAULT 0')
+
+SESSION_DEVICE_SCHEMA = '''CREATE TABLE IF NOT EXISTS session_devices (
+  token_hash TEXT PRIMARY KEY REFERENCES sessions(token_hash) ON DELETE CASCADE,
+  label TEXT NOT NULL)'''
 
 def hash_token(value): return hashlib.sha256(value.encode()).hexdigest()
 
@@ -162,13 +167,20 @@ def install_routes(app, connect, current_profile, public, digest):
         email_verified = bool(db.execute('SELECT 1 FROM email_identities WHERE profile_id=?', (profile_id,)).fetchone())
         return {'verified': linked or email_verified, 'google_linked': linked, 'email': (row['email'] or '') if row else ''}
 
-    def session(db, profile_id):
+    def session(db, profile_id, request):
         profile = db.execute('SELECT * FROM profiles WHERE id=?', (profile_id,)).fetchone()
         if not profile or not profile['is_active']: raise HTTPException(403, 'Аккаунт временно недоступен')
         token, now = secrets.token_urlsafe(32), time.time()
         db.execute('DELETE FROM sessions WHERE expires<?', (now,))
         db.execute('INSERT INTO sessions VALUES(?,?,?,?,?)', (hash_token(token), profile_id, now, now + 90 * 86400, now))
+        save_device(db, hash_token(token), request)
         return {'profile': public(profile), 'session_token': token, **account_json(db, profile_id)}
+
+    def save_device(db, token_hash, request):
+        label = request.headers.get('x-salom-device', '').strip()[:72]
+        if re.fullmatch(r'(?:Android|Windows)(?: · [A-Za-z0-9 ._()+-]{1,55})?', label.replace(' / ', ' · ')):
+            db.execute('INSERT INTO session_devices(token_hash,label) VALUES(?,?) ON CONFLICT(token_hash) DO NOTHING',
+                       (token_hash, label.replace(' / ', ' · ')))
 
     @app.get('/auth/config')
     def config():
@@ -210,7 +222,7 @@ redis.call('DEL',KEYS[1]); return 1
         if result!=1: raise HTTPException(400,'Код неверный')
         with connect() as db:
             existing=db.execute('SELECT * FROM accounts WHERE email=?',(email,)).fetchone()
-            if existing: return session(db,existing['profile_id'])
+            if existing: return session(db,existing['profile_id'], request)
         ticket=secrets.token_urlsafe(32)
         redis.set('salom:email-ticket:'+hashlib.sha256(ticket.encode()).hexdigest(),email,ex=300)
         return {'needs_username':True,'ticket':ticket,'expires_in':300}
@@ -237,7 +249,7 @@ redis.call('DEL',KEYS[1]); return 1
             if redis.getdel(ticket_key)!=email: raise HTTPException(400,'Подтверждение уже использовано. Запроси новый код')
             db.execute('INSERT INTO email_identities(profile_id) VALUES(?) ON CONFLICT(profile_id) DO NOTHING',(target,))
             db.execute('UPDATE profiles SET token_hash=? WHERE id=?',(hash_token(secrets.token_urlsafe(32)),target))
-            return session(db,target)
+            return session(db,target, request)
 
     @app.post('/auth/desktop/custom-token')
     def desktop_custom_token(proof: DesktopGoogleProof, request: Request):
@@ -283,7 +295,7 @@ redis.call('DEL',KEYS[1]); return 1
                 verified_email=db.execute('SELECT 1 FROM email_identities WHERE profile_id=?',(email_owner['profile_id'],)).fetchone()
                 if not verified_email: raise HTTPException(409, 'Сначала подключи Google из существующего профиля Салом')
                 db.execute('UPDATE accounts SET firebase_uid=?,google_linked=1 WHERE profile_id=?',(contact['firebase_uid'],email_owner['profile_id']))
-                return session(db,email_owner['profile_id'])
+                return session(db,email_owner['profile_id'], request)
             if owner:
                 target = owner['id']
                 valid_owner = db.execute('SELECT 1 FROM profiles p WHERE p.id=? AND p.is_active=1 AND (p.token_hash=? OR EXISTS(SELECT 1 FROM sessions s WHERE s.profile_id=p.id AND s.token_hash=? AND s.expires>?))',
@@ -306,7 +318,7 @@ redis.call('DEL',KEYS[1]); return 1
                     db.execute('UPDATE accounts SET google_linked=1,email=? WHERE profile_id=?', (contact['email'], existing['profile_id']))
                 else:
                     db.execute('UPDATE accounts SET email=? WHERE profile_id=?', (contact['email'], existing['profile_id']))
-                return session(db, existing['profile_id'])
+                return session(db, existing['profile_id'], request)
             else:
                 if proof.bind_current: raise HTTPException(401, 'Сессия истекла. Открой сохранённый профиль и повтори подключение')
                 if not proof.username: return {'needs_username': True}
@@ -325,12 +337,27 @@ redis.call('DEL',KEYS[1]); return 1
             except INTEGRITY_ERRORS: raise HTTPException(409, 'Google уже связан с другим аккаунтом')
             # Upgrade ownership without changing profile ID or its message history.
             db.execute('UPDATE profiles SET token_hash=? WHERE id=?', (hash_token(secrets.token_urlsafe(32)), target))
-            return session(db, target)
+            return session(db, target, request)
 
     @app.get('/auth/me')
     def me(authorization: str | None = Header(default=None)):
         profile = current_profile(authorization)
         with connect() as db: return account_json(db, profile['id'])
+
+    @app.get('/auth/devices')
+    def devices(request: Request, authorization: str | None = Header(default=None)):
+        profile = current_profile(authorization)
+        current = digest(authorization)
+        with connect() as db:
+            if db.execute('SELECT 1 FROM sessions WHERE profile_id=? AND token_hash=? AND expires>?',
+                          (profile['id'], current, time.time())).fetchone():
+                save_device(db, current, request)
+            rows = db.execute('''SELECT s.token_hash,s.created,d.label FROM sessions s
+                                  LEFT JOIN session_devices d ON d.token_hash=s.token_hash
+                                  WHERE s.profile_id=? AND s.expires>? ORDER BY s.created DESC LIMIT 50''',
+                              (profile['id'], time.time())).fetchall()
+        return {'devices': [{'label': row['label'], 'created': row['created'], 'current': row['token_hash'] == current}
+                            for row in rows]}
 
     @app.post('/auth/logout')
     def logout(authorization: str | None = Header(default=None)):

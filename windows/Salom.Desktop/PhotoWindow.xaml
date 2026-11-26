@@ -1,0 +1,21 @@
+<Window x:Class="Salom.Desktop.PhotoWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Фото · Салом" Width="840" Height="650" MinWidth="360" MinHeight="300"
+        Background="#11161D" Foreground="#EDF1F5" WindowStartupLocation="CenterOwner"
+        Icon="assets/salom.ico" KeyDown="Viewer_KeyDown">
+    <DockPanel Margin="14">
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Button Content="−" Width="32" Click="ZoomOut_Click" ToolTip="Уменьшить"/>
+            <Button Content="По размеру" Padding="9,4" Margin="5,0" Click="Fit_Click"/>
+            <Button Content="+" Width="32" Click="ZoomIn_Click" ToolTip="Увеличить"/>
+            <Button x:Name="SaveButton" Content="Сохранить фото" Padding="9,4" Margin="10,0,0,0" Click="Save_Click"/>
+        </WrapPanel>
+        <TextBlock DockPanel.Dock="Bottom" x:Name="Status" Foreground="#B8C3CF" TextWrapping="Wrap" Margin="0,8,0,0"/>
+        <ScrollViewer x:Name="Viewport" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"
+                      SizeChanged="Viewport_SizeChanged" Background="#17202A">
+            <Image x:Name="Picture" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   AutomationProperties.Name="Фотография"/>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

@@ -35,6 +35,9 @@ internal sealed class DesktopClient
     }
 
     internal bool HasSession => !string.IsNullOrWhiteSpace(_session);
+    internal string? NotificationOwner => HasSession ? _profileId : null;
+    internal string? PhotoCacheScope => HasSession && !string.IsNullOrWhiteSpace(_profileId)
+        ? _apiBase.AbsoluteUri + "\n" + _profileId : null;
     internal async Task SignInAsync(string name, string username)
     {
         var clientId = _authSettings.GoogleClientId;
@@ -71,8 +74,12 @@ internal sealed class DesktopClient
     internal async Task ValidateSessionAsync()
     {
         if (!HasSession) return;
-        try { _ = await GetAsync("auth/me"); }
-        catch { SignOut(); throw; }
+        try { using var profile = await GetAsync("auth/me"); }
+        catch (HttpRequestException error) when (error.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            SignOut();
+            throw;
+        }
     }
 
     internal void SignOut() { _session = null; _profileId = null; SessionVault.Delete(); }
@@ -99,62 +106,188 @@ internal sealed class DesktopClient
             p.TryGetProperty("username", out var user) ? user.GetString() ?? "" : "", "Новый чат")).ToList();
     }
 
-    internal async Task<List<ChatMessage>> MessagesAsync(string peerId, long after = 0)
+    internal async Task<ChatHistory> MessagesAsync(string peerId, long after, long eventsAfter)
     {
         var result = new List<ChatMessage>();
+        var events = new List<ChatHistoryEvent>();
         var cursor = after;
+        long clearedThrough = 0;
         while (true)
         {
-            using var json = await GetAsync("messages?peer_id=" + Uri.EscapeDataString(peerId) + "&after=" + cursor);
+            using var json = await GetAsync("messages?peer_id=" + Uri.EscapeDataString(peerId) + "&after=" + cursor + "&events_after=" + eventsAfter);
             var root = json.RootElement;
             var batch = root.GetProperty("messages").EnumerateArray().Select(ParseMessage).ToList();
             result.AddRange(batch);
             if (batch.Count > 0) cursor = Math.Max(cursor, batch[^1].Id);
-            if (!root.TryGetProperty("has_more", out var more) || !more.GetBoolean() || batch.Count == 0) break;
+            if (root.TryGetProperty("cleared_through", out var cleared)) clearedThrough = Math.Max(clearedThrough, cleared.GetInt64());
+            var hasMoreEvents = false;
+            if (root.TryGetProperty("events", out var changes))
+            {
+                foreach (var change in changes.EnumerateArray())
+                {
+                    var sequence = change.GetProperty("id").GetInt64();
+                    eventsAfter = Math.Max(eventsAfter, sequence);
+                    events.Add(new ChatHistoryEvent(change.GetProperty("message_id").GetInt64(), change.GetProperty("kind").GetString(),
+                        change.TryGetProperty("message", out var edited) ? ParseMessage(edited) : null));
+                }
+                hasMoreEvents = changes.GetArrayLength() >= 300;
+            }
+            if (!hasMoreEvents && (batch.Count == 0 || !root.TryGetProperty("has_more", out var more) || !more.GetBoolean())) break;
         }
-        return result;
+        return new ChatHistory(result, events, clearedThrough, eventsAfter);
     }
 
-    internal async Task<ChatMessage> SendAsync(ChatItem peer, string text)
+    internal async Task<ChatMessage> SendTextAsync(string peerId, string text, Guid clientId, long? replyId, CancellationToken token)
     {
-        using var json = await PostAsync("messages", new { recipient_id = peer.Id, client_id = Guid.NewGuid().ToString(), text });
+        using var json = await SendAsync(HttpMethod.Post, "messages",
+            new { recipient_id = peerId, client_id = clientId, text, reply_to_id = replyId }, true, token);
         return ParseMessage(json.RootElement);
     }
 
-    internal async Task<ChatMessage> SendAttachmentAsync(ChatItem peer, string path, string text)
+    internal async Task MarkNotificationsReadAsync(string peerId, CancellationToken token)
     {
-        var info = new FileInfo(path);
-        const long maxFileBytes = 25L * 1024 * 1024;
-        if (!info.Exists || info.Length is <= 0 or > maxFileBytes) throw new InvalidOperationException("Файл должен быть размером от 1 байта до 25 МБ.");
-        var uploadPath = "attachments?peer_id=" + Uri.EscapeDataString(peer.Id) + "&name=" + Uri.EscapeDataString(info.Name) + "&kind=file";
+        using var response = await SendAsync(HttpMethod.Get,
+            $"messages?peer_id={Uri.EscapeDataString(peerId)}&after={long.MaxValue}&receipts_after={long.MaxValue}&events_after={long.MaxValue}",
+            null, true, token);
+    }
+
+    internal async Task DeleteMessageAsync(long messageId, bool forEveryone)
+    {
+        using var result = await SendAsync(HttpMethod.Delete, $"messages/{messageId}?scope={(forEveryone ? "everyone" : "me")}", null, true);
+    }
+
+    internal async Task<ChatMessage> EditMessageAsync(long messageId, string text)
+    {
+        using var result = await SendAsync(HttpMethod.Put, $"messages/{messageId}", new { text }, true);
+        return ParseMessage(result.RootElement);
+    }
+
+    internal async Task SetReactionAsync(long messageId, string? emoji)
+    {
+        using var result = await SendAsync(HttpMethod.Put, $"messages/{messageId}/reaction", new { emoji }, true);
+    }
+
+    internal async Task<long> ClearChatAsync(string peerId)
+    {
+        using var result = await SendAsync(HttpMethod.Delete, "messages?peer_id=" + Uri.EscapeDataString(peerId), null, true);
+        return result.RootElement.GetProperty("cleared_through").GetInt64();
+    }
+
+    internal const long MaxAttachmentBytes = 25L * 1024 * 1024;
+
+    internal async Task<ChatMessage> SendAttachmentAsync(ChatItem peer, string path, string text,
+        Guid transferId, IProgress<int> progress, CancellationToken cancellationToken, long? replyId = null, VoiceClip? voice = null)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(3));
+        var token = timeout.Token;
+        var scope = PhotoCacheScope ?? throw new InvalidOperationException("Сначала войди в аккаунт.");
+        await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
+        if (file.Length is <= 0 or > MaxAttachmentBytes) throw new InvalidOperationException("Файл должен быть размером от 1 байта до 25 МБ.");
+        var digest = await SHA256.HashDataAsync(file, token);
+        file.Position = 0;
+        var uploadPath = "attachments?peer_id=" + Uri.EscapeDataString(peer.Id) + "&name=" +
+            Uri.EscapeDataString(Path.GetFileName(path)) + "&upload_id=" + transferId;
+        if (voice != null)
+            uploadPath += "&kind=voice&duration_ms=" + voice.DurationMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "&waveform=" + Uri.EscapeDataString(string.Join(',', voice.Waveform));
+        token.ThrowIfCancellationRequested();
+        if (scope != PhotoCacheScope) throw new OperationCanceledException();
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_apiBase, uploadPath));
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _session);
-        var file = new ByteArrayContent(await File.ReadAllBytesAsync(path));
-        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        request.Content = file;
-        using var response = await _http.SendAsync(request);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _session);
+        request.Headers.Add("X-Content-SHA256", Convert.ToHexString(digest).ToLowerInvariant());
+        request.Content = new UploadContent(file, progress);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(voice == null ? "application/octet-stream" : "audio/mp4");
+        using var response = await _http.SendAsync(request, token);
         using var metadata = await ReadJsonAsync(response);
         var attachmentId = metadata.RootElement.GetProperty("id").GetString();
-        using var sent = await PostAsync("messages", new { recipient_id = peer.Id, client_id = Guid.NewGuid().ToString(), text, attachment_id = attachmentId });
+        token.ThrowIfCancellationRequested();
+        if (scope != PhotoCacheScope) throw new OperationCanceledException();
+        using var sent = await SendAsync(HttpMethod.Post, "messages",
+            new { recipient_id = peer.Id, client_id = transferId.ToString(), text, attachment_id = attachmentId, reply_to_id = replyId },
+            authenticated: true, cancellationToken: token);
         return ParseMessage(sent.RootElement);
     }
 
-    internal async Task<JsonDocument> CreateCallAsync(string peerId) => await PostAsync("calls", new { peer_id = peerId });
+    private sealed class UploadContent(FileStream file, IProgress<int> progress) : HttpContent
+    {
+        protected override bool TryComputeLength(out long length) { length = file.Length; return true; }
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken cancellationToken)
+        {
+            var buffer = new byte[65536];
+            var reported = -1;
+            while (await file.ReadAsync(buffer, cancellationToken) is var count && count != 0)
+            {
+                await stream.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+                var percent = (int)(100 * file.Position / file.Length);
+                if (percent != reported) progress.Report(reported = percent);
+            }
+        }
+    }
+
+    internal async Task<JsonDocument> CreateCallAsync(string peerId, bool video) => video
+        ? await PostAsync("calls", new { peer_id = peerId, mode = "video" })
+        : await PostAsync("calls", new { peer_id = peerId });
     internal async Task<JsonDocument> UpdateCallAsync(string callId, string action) => await PostAsync("calls/" + Uri.EscapeDataString(callId) + "/state", new { action });
     internal async Task<JsonDocument> CallConfigAsync() => await GetAsync("calls/config");
     internal async Task SignalCallAsync(string callId, string kind, JsonElement payload) =>
         _ = await PostAsync("calls/" + Uri.EscapeDataString(callId) + "/signal", new { kind, payload });
 
-    internal async Task DownloadAttachmentAsync(string attachmentId, string destination, CancellationToken cancellationToken = default)
+    internal Task DownloadPhotoAsync(string scope, string attachmentId, string destination, IProgress<int> progress,
+        CancellationToken cancellationToken) => DownloadAttachmentAsync(attachmentId, destination, progress, cancellationToken, scope);
+
+    internal async Task DownloadAttachmentAsync(string attachmentId, string destination, IProgress<int> progress,
+        CancellationToken cancellationToken, string? expectedPhotoScope = null)
     {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(3));
+        var token = timeout.Token;
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_apiBase, "attachments/" + Uri.EscapeDataString(attachmentId)));
-        if (string.IsNullOrWhiteSpace(_session)) throw new InvalidOperationException("Сначала войдите в аккаунт.");
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _session);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var session = _session;
+        if (string.IsNullOrWhiteSpace(session)) throw new InvalidOperationException("Сначала войдите в аккаунт.");
+        if (expectedPhotoScope != null && (expectedPhotoScope != PhotoCacheScope || session != _session))
+            throw new InvalidOperationException("Аккаунт изменился. Откройте чат снова.");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", session);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
         response.EnsureSuccessStatusCode();
-        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true);
-        await input.CopyToAsync(output, cancellationToken);
+        const long maxFileBytes = 25L * 1024 * 1024;
+        var expectedSize = response.Content.Headers.ContentLength;
+        if (expectedSize is <= 0 or > maxFileBytes) throw new IOException("Неверный размер файла.");
+        var expectedHash = response.Headers.TryGetValues("X-Content-SHA256", out var values) ? values.FirstOrDefault() : null;
+        var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
+        try
+        {
+            long total = 0;
+            var reported = -1;
+            using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            await using (var input = await response.Content.ReadAsStreamAsync(token))
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, useAsync: true))
+            {
+                var buffer = new byte[65536];
+                while (await input.ReadAsync(buffer, token) is var count && count != 0)
+                {
+                    total += count;
+                    if (total > maxFileBytes || total > expectedSize) throw new IOException("Неверный размер файла.");
+                    digest.AppendData(buffer, 0, count);
+                    await output.WriteAsync(buffer.AsMemory(0, count), token);
+                    if (expectedSize is long size)
+                    {
+                        var percent = (int)(100 * total / size);
+                        if (percent != reported) progress.Report(reported = percent);
+                    }
+                }
+            }
+            if (total == 0 || (expectedSize.HasValue && total != expectedSize))
+                throw new IOException("Файл скачан не полностью.");
+            if (expectedHash != null && !Convert.ToHexString(digest.GetHashAndReset()).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Контрольная сумма файла не совпала.");
+            token.ThrowIfCancellationRequested();
+            File.Move(temporary, destination, overwrite: true);
+        }
+        finally { File.Delete(temporary); }
     }
 
     internal async Task<ClientWebSocket> ConnectRealtimeAsync(string peerId, CancellationToken cancellationToken)
@@ -166,11 +299,15 @@ internal sealed class DesktopClient
             Port = _apiBase.IsDefaultPort ? -1 : _apiBase.Port
         };
         var socket = new ClientWebSocket();
-        socket.Options.SetRequestHeader("Authorization", "Bearer " + _session);
-        await socket.ConnectAsync(builder.Uri, cancellationToken);
-        var subscribe = JsonSerializer.SerializeToUtf8Bytes(new { type = "subscribe", peer_id = "*" });
-        await socket.SendAsync(subscribe, WebSocketMessageType.Text, true, cancellationToken);
-        return socket;
+        try
+        {
+            socket.Options.SetRequestHeader("Authorization", "Bearer " + _session);
+            await socket.ConnectAsync(builder.Uri, cancellationToken);
+            var subscribe = JsonSerializer.SerializeToUtf8Bytes(new { type = "subscribe", peer_id = "*" });
+            await socket.SendAsync(subscribe, WebSocketMessageType.Text, true, cancellationToken);
+            return socket;
+        }
+        catch { socket.Dispose(); throw; }
     }
 
     internal async Task HeartbeatAsync(CancellationToken cancellationToken = default)
@@ -204,26 +341,47 @@ internal sealed class DesktopClient
     {
         var seconds = m.GetProperty("created").GetDouble();
         var attachment = m.TryGetProperty("attachment", out var value) && value.ValueKind == JsonValueKind.Object ? value : default;
+        var voice = attachment.ValueKind == JsonValueKind.Object && attachment.TryGetProperty("kind", out var kind) && kind.GetString() == "voice"
+            ? new VoiceClip(
+                attachment.TryGetProperty("duration_ms", out var duration) && duration.TryGetInt32(out var ms) ? Math.Clamp(ms, 0, 300000) : 0,
+                attachment.TryGetProperty("waveform", out var waveform) && waveform.ValueKind == JsonValueKind.Array
+                    ? waveform.EnumerateArray().Take(32).Select(peak => peak.TryGetInt32(out var p) ? Math.Clamp(p, 0, 100) : 0).ToArray()
+                    : Array.Empty<int>())
+            : null;
+        var reply = m.TryGetProperty("reply_to", out var quote) && quote.ValueKind == JsonValueKind.Object ? quote : default;
+        var mine = m.GetProperty("sender_id").GetString() == _profileId;
+        var reactions = m.TryGetProperty("reactions", out var reactionValue) && reactionValue.ValueKind == JsonValueKind.Object ? reactionValue : default;
+        string? Reaction(string party) => reactions.ValueKind == JsonValueKind.Object &&
+            reactions.TryGetProperty(party, out var emoji) && emoji.ValueKind == JsonValueKind.String ? emoji.GetString() : null;
         return new ChatMessage(m.GetProperty("id").GetInt64(), m.GetProperty("text").GetString() ?? "",
-            m.GetProperty("sender_id").GetString() == _profileId, DateTimeOffset.FromUnixTimeMilliseconds((long)(seconds * 1000)).LocalDateTime,
+            mine, DateTimeOffset.FromUnixTimeMilliseconds((long)(seconds * 1000)).LocalDateTime,
             attachment.ValueKind == JsonValueKind.Object ? attachment.GetProperty("id").GetString() : null,
-            attachment.ValueKind == JsonValueKind.Object ? attachment.GetProperty("name").GetString() : null);
+            attachment.ValueKind == JsonValueKind.Object ? attachment.GetProperty("name").GetString() : null,
+            attachment.ValueKind == JsonValueKind.Object && attachment.TryGetProperty("mime", out var mime) ? mime.GetString() : null,
+            reply.ValueKind == JsonValueKind.Object ? reply.GetProperty("text").GetString() : null,
+            reply.ValueKind == JsonValueKind.Object && reply.GetProperty("sender_id").GetString() == _profileId,
+            voice, m.TryGetProperty("client_id", out var clientId) && clientId.ValueKind == JsonValueKind.String &&
+                clientId.TryGetGuid(out var guid) ? guid : null,
+            reply.ValueKind == JsonValueKind.Object && reply.TryGetProperty("id", out var replyId) ? replyId.GetInt64() : null,
+            m.TryGetProperty("edited_at", out var edited) && edited.ValueKind == JsonValueKind.Number,
+            Reaction(mine ? "sender" : "recipient"), Reaction(mine ? "recipient" : "sender"));
     }
 
     private Task<JsonDocument> GetAsync(string path) => SendAsync(HttpMethod.Get, path, null, true);
     private Task<JsonDocument> PostAsync(string path, object body, bool authenticated = true) => SendAsync(HttpMethod.Post, path, body, authenticated);
-    private async Task<JsonDocument> SendAsync(HttpMethod method, string path, object? body, bool authenticated)
+    private async Task<JsonDocument> SendAsync(HttpMethod method, string path, object? body, bool authenticated, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(method, new Uri(_apiBase, path));
         request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Add("X-Salom-Device", "Windows");
         if (authenticated)
         {
             if (string.IsNullOrWhiteSpace(_session)) throw new InvalidOperationException("Сначала войдите в аккаунт.");
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _session);
         }
         if (body is not null) request.Content = JsonContent.Create(body);
-        using var response = await _http.SendAsync(request);
-        var content = await response.Content.ReadAsStringAsync();
+        using var response = await _http.SendAsync(request, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var detail = "Ошибка сервера: " + (int)response.StatusCode;
@@ -238,7 +396,7 @@ internal sealed class DesktopClient
         var content = await response.Content.ReadAsStringAsync();
         if (!response.IsSuccessStatusCode)
         {
-            var detail = "Google/Firebase sign-in failed (" + (int)response.StatusCode + ")";
+            var detail = "Ошибка сервера (" + (int)response.StatusCode + ")";
             try { detail = JsonDocument.Parse(content).RootElement.GetProperty("error").GetProperty("message").GetString() ?? detail; } catch { }
             throw new InvalidOperationException(detail);
         }
@@ -253,19 +411,55 @@ internal sealed record ChatItem(string Id, string Name, string Username, string 
     public System.Windows.Visibility UnreadVisibility => UnreadCount > 0 ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
 }
 
+internal sealed record ChatHistory(List<ChatMessage> Messages, List<ChatHistoryEvent> Events, long ClearedThrough, long EventCursor);
+internal sealed record ChatHistoryEvent(long MessageId, string? Kind, ChatMessage? Edited);
+internal sealed record VoiceClip(int DurationMs, int[] Waveform);
+
 internal sealed class ChatMessage
 {
     public long Id { get; }
     public string Text { get; }
     public bool IsMine { get; }
     public DateTime Created { get; }
-    public string TimeLabel => Created.ToString("HH:mm");
+    public string TimeLabel => Created.ToString("HH:mm") + (PendingStatus == null ? (Edited ? " · изменено" : "") : " · " + PendingStatus);
+    public bool CanEdit => Id > 0 && IsMine && HasText && !HasAttachment;
+    public bool Edited { get; }
+    public long? ReplyId { get; }
+    public string? MyReaction { get; }
+    public string? PeerReaction { get; }
+    public bool HasReactions => MyReaction != null || PeerReaction != null;
+    public string ReactionLabel => string.Join("   ", new[] { MyReaction, PeerReaction }
+        .OfType<string>().GroupBy(emoji => emoji).Select(group => $"{group.Key} {group.Count()}"));
+    public string? PendingStatus { get; init; }
+    public Guid? ClientId { get; }
     public string Alignment => IsMine ? "Right" : "Left";
     public string BubbleBrush => IsMine ? "#4D3D05" : "#202B38";
     public string? AttachmentId { get; }
     public string? AttachmentName { get; }
+    public string? AttachmentMime { get; }
     public bool HasAttachment => !string.IsNullOrWhiteSpace(AttachmentId);
-    internal ChatMessage(long id, string text, bool mine, DateTime created, string? attachmentId = null, string? attachmentName = null) { Id = id; Text = text; IsMine = mine; Created = created; AttachmentId = attachmentId; AttachmentName = attachmentName; }
+    public bool HasPhoto => HasAttachment && PhotoDecoder.IsPhoto(AttachmentMime, AttachmentName);
+    public bool HasVoice => HasAttachment && (Voice != null ||
+        (AttachmentName?.StartsWith("voice_", StringComparison.OrdinalIgnoreCase) == true &&
+         Path.GetExtension(AttachmentName).Equals(".m4a", StringComparison.OrdinalIgnoreCase)));
+    public bool HasFile => HasAttachment && !HasVoice && !HasPhoto;
+    public VoiceClip? Voice { get; }
+    public bool HasText => !string.IsNullOrWhiteSpace(Text);
+    public string Preview => HasText ? Text : HasPhoto ? "Фото" : AttachmentName ?? "Сообщение";
+    public string? ReplyText { get; }
+    public bool ReplyIsMine { get; }
+    public string ReplyAuthor => ReplyIsMine ? "Вы" : "Собеседник";
+    public bool HasReply => ReplyText != null;
+    internal ChatMessage(long id, string text, bool mine, DateTime created, string? attachmentId = null, string? attachmentName = null,
+        string? attachmentMime = null, string? replyText = null, bool replyIsMine = false, VoiceClip? voice = null,
+        Guid? clientId = null, long? replyId = null, bool edited = false, string? myReaction = null, string? peerReaction = null)
+    {
+        Id = id; Text = text; IsMine = mine; Created = created;
+        AttachmentId = attachmentId; AttachmentName = attachmentName; AttachmentMime = attachmentMime;
+        ReplyText = replyText; ReplyIsMine = replyIsMine; Voice = voice; ClientId = clientId;
+        ReplyId = replyId; Edited = edited;
+        MyReaction = myReaction; PeerReaction = peerReaction;
+    }
 }
 
 internal static class SessionVault

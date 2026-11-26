@@ -30,8 +30,13 @@ class UnreadCountsTest(unittest.TestCase):
                                 result = client.get('/conversations')
                                 self.assertEqual(result.status_code, 200, result.text)
                                 self.assertEqual(result.json()['conversations'][0]['unread_count'], 5)
-                            read = client.get('/messages', params={'peer_id': 'sender'})
+                            # Notification actions acknowledge the chat without loading its history.
+                            cursor = (1 << 63) - 1
+                            read = client.get('/messages', params={
+                                'peer_id': 'sender', 'after': cursor, 'receipts_after': cursor, 'events_after': cursor,
+                            })
                             self.assertEqual(read.status_code, 200, read.text)
+                            self.assertEqual(read.json()['messages'], [])
                             self.assertEqual(client.get('/conversations').json()['conversations'][0]['unread_count'], 0)
             finally:
                 app.DB = previous

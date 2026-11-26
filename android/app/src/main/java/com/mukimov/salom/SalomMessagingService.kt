@@ -106,6 +106,9 @@ class PushRegistrationWorker(context: Context, parameters: WorkerParameters) : C
 }
 
 class SalomMessagingService : FirebaseMessagingService() {
+    private companion object {
+        val recentMessages = linkedSetOf<String>()
+    }
     override fun onNewToken(token: String) { PushNotifications.sync(this) }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -117,14 +120,19 @@ class SalomMessagingService : FirebaseMessagingService() {
             return
         }
         if (message.data["type"] == "missed_call") { showMissedCall(message.data); return }
-        val peerId = message.data["peer_id"] ?: return
-        val messageId = message.data["message_id"] ?: return
+        val peerId = message.data["peer_id"]?.takeIf(::notificationUuid) ?: return
+        val messageId = message.data["message_id"]?.toLongOrNull()?.takeIf { it > 0 } ?: return
         val manager = NotificationManagerCompat.from(this)
-        val appVisible = local.getBoolean("app_visible", false)
+        val appVisible = MainActivity.visible
         val activePeer = local.getString("active_peer_id", null)
         if (appVisible && activePeer == peerId) {
             manager.cancel("salom-peer-$peerId", 0)
             return
+        }
+        val key = local.getString("owner_profile_id", "").orEmpty() + ":" + messageId
+        synchronized(recentMessages) {
+            if (!recentMessages.add(key)) return
+            if (recentMessages.size > 512) recentMessages.remove(recentMessages.first())
         }
         PushNotifications.createChannel(this)
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -133,17 +141,21 @@ class SalomMessagingService : FirebaseMessagingService() {
             data = android.net.Uri.parse("salom://chat/$peerId")
         }
         val pending = PendingIntent.getActivity(this, peerId.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val title = message.notification?.title ?: "Салом"
-        val body = message.notification?.body ?: "Новое сообщение"
-        val silent = appVisible
+        val privatePreview = local.getBoolean("private_notification_preview", false)
+        val title = if (privatePreview) "Салом" else message.data["title"] ?: message.notification?.title ?: "Салом"
+        val body = if (privatePreview) "Новое сообщение" else message.data["body"] ?: message.notification?.body ?: "Новое сообщение"
+        val owner = local.getString("owner_profile_id", null).orEmpty()
+        val muted = MessageNotificationReceiver.muted(this, owner, peerId)
+        val silent = appVisible || muted
         val notification = NotificationCompat.Builder(this, if (silent) PushNotifications.SILENT_CHANNEL else PushNotifications.CHANNEL)
             .setSmallIcon(R.drawable.ic_notification).setColor(0xFFFFC400.toInt())
             .setContentTitle(title).setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(pending).setAutoCancel(true).setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        if (notificationUuid(owner)) MessageNotificationReceiver.addActions(this, notification, owner, peerId, messageId, muted)
         if (Build.VERSION.SDK_INT < 26) notification.setSound(if (silent) null else PushNotifications.soundUri(this)).setPriority(if (silent) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_HIGH)
         try { manager.notify("salom-peer-$peerId", 0, notification.build()) }
-        catch (_: SecurityException) { /* Permission can be revoked between checking and posting. */ }
+        catch (_: SecurityException) { synchronized(recentMessages) { recentMessages.remove(key) } }
     }
 
     private fun showIncomingCall(data: Map<String, String>) {
@@ -156,6 +168,7 @@ class SalomMessagingService : FirebaseMessagingService() {
             putExtra("incoming_call_id", callId)
             putExtra("incoming_call_peer", callerId)
             putExtra("incoming_call_name", data["caller_name"]?.take(80) ?: "Салом")
+            putExtra("incoming_call_video", data["mode"] == "video")
             this.data = android.net.Uri.parse("salom://call/$callId")
         }
         fun pending(action: String, requestCode: Int) = PendingIntent.getActivity(this, requestCode,

@@ -3,9 +3,16 @@ package com.mukimov.salom
 import kotlin.math.log10
 import kotlin.math.max
 
+internal enum class VoiceHoldAction { CONTINUE, RELEASE, CANCEL }
+
 internal object VoicePolicy {
     const val MIN_MS = 1000L
     const val MAX_MS = 300_000L
+    fun holdAction(leftDistance: Float, threshold: Float, pressed: Boolean, interrupted: Boolean): VoiceHoldAction = when {
+        interrupted || leftDistance >= threshold -> VoiceHoldAction.CANCEL
+        !pressed -> VoiceHoldAction.RELEASE
+        else -> VoiceHoldAction.CONTINUE
+    }
     fun waveform(peaks: List<Int>): List<Int> = List(32) { bucket ->
         if (peaks.isEmpty()) 0 else {
             val from = bucket * peaks.size / 32

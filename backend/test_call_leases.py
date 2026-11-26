@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -57,6 +58,31 @@ class CallLeaseTests(unittest.TestCase):
         self.clock.return_value = 1046.0
         self.assertEqual(self.action(call, self.b, 'accept_leased'), 'missed')
         self.assertNotEqual(self.create(), call)
+
+    def test_accept_uses_time_after_database_wait(self):
+        call = self.create()
+        open_db = app.connect
+
+        @contextmanager
+        def delayed_connection():
+            with open_db() as db:
+                self.clock.return_value = 1046.0
+                yield db
+
+        with patch.object(app, 'connect', delayed_connection):
+            self.assertEqual(self.action(call, self.b, 'accept_leased'), 'missed')
+
+    def test_audio_default_and_explicit_video_mode(self):
+        first = self.create()
+        self.assertEqual(self.publish.call_args.args[1]['mode'], 'audio')
+        self.action(first, self.a, 'cancel')
+        self.profile.return_value = {'id': self.a, 'name': 'Test'}
+        result = app.create_call(app.CallCreateInput(peer_id=self.b, mode='video'), None)
+        self.assertEqual(result['mode'], 'video')
+        self.assertEqual(self.publish.call_args.args[1]['mode'], 'video')
+        with app.connect() as db:
+            self.assertEqual(db.execute('SELECT media_mode FROM call_sessions WHERE id=?',
+                                        (result['call_id'],)).fetchone()['media_mode'], 'video')
 
     def test_concurrent_invites_cannot_create_two_active_calls(self):
         def invite():

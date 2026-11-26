@@ -1,0 +1,17 @@
+{
+  "version": "0.16.4",
+  "displayName": "",
+  "versionCode": 33,
+  "minSdk": 24,
+  "releaseDate": "2026-11-26",
+  "releaseNotes": [
+    "Поделись профилем по ссылке или сохрани QR-код в одном из трёх стилей.",
+    "Фото, PDF, TXT и Markdown открываются внутри Android-приложения.",
+    "Коснись текстового сообщения, чтобы поставить реакцию. Поле ввода плавно меняет высоту."
+  ],
+  "sha256": "f6d81c9c0aae257a85a5cbcbeb9a87b38a7af17a11c4e83ccf119c892103ef71",
+  "androidVariants": {
+    "arm64-v8a": "6eb25a574c5e093b3d338c1d2fe901f13527eb98f9cb1b9546575d75dbe5e968",
+    "armeabi-v7a": "b6c68d58bae4918456a54627963c84ca0af927251e9d23edc759dbd87e9afa89"
+  }
+}

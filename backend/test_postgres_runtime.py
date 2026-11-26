@@ -1,9 +1,11 @@
 """PostgreSQL API smoke test against the disposable migration rehearsal database."""
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import os
 import secrets
 import tempfile
 import time
+from threading import Barrier
 import unittest
 import uuid
 from pathlib import Path
@@ -39,11 +41,42 @@ class PostgresRuntimeTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as media_root, \
                     patch.object(media, "ROOT", Path(media_root)), \
                     patch.object(app, "PG_DSN", dsn), TestClient(app.app) as client:
-                sent = client.post("/messages", headers={"Authorization": "Bearer " + alice_token}, json={
-                    "recipient_id": bob_id, "client_id": str(uuid.uuid4()), "text": "synthetic PostgreSQL smoke"
-                })
+                client_id = str(uuid.uuid4())
+                body = {"recipient_id": bob_id, "client_id": client_id, "text": "synthetic PostgreSQL smoke"}
+                send_gate = Barrier(2)
+                def submit(_):
+                    send_gate.wait(timeout=5)
+                    return client.post("/messages", headers={"Authorization": "Bearer " + alice_token}, json=body)
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    sent, replay = list(pool.map(submit, range(2)))
                 self.assertEqual(sent.status_code, 200, sent.text)
+                self.assertEqual(replay.status_code, 200, replay.text)
                 message_id = sent.json()["id"]
+                self.assertEqual(replay.json()["id"], message_id)
+                self.assertEqual(replay.json()["client_id"], client_id)
+                with psycopg.connect(dsn) as db:
+                    self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE sender_id=%s AND client_id=%s",
+                                                (alice_id, client_id)).fetchone()[0], 1)
+                bob_auth = {"Authorization": "Bearer " + bob_token}
+                for _ in range(12):
+                    with psycopg.connect(dsn) as db:
+                        db.execute(
+                            "INSERT INTO messages(sender_id,recipient_id,client_id,text,created) VALUES(%s,%s,%s,%s,%s)",
+                            (alice_id, bob_id, str(uuid.uuid4()), "receipt concurrency probe", now),
+                        )
+                start = Barrier(4)
+                def fetch(index):
+                    start.wait(timeout=5)
+                    path = "/messages" if index % 2 else "/conversations"
+                    return client.get(path, params={"peer_id": alice_id}, headers=bob_auth).status_code
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    self.assertEqual(list(pool.map(fetch, range(4))), [200] * 4)
+                with psycopg.connect(dsn) as db:
+                    pending = db.execute(
+                        "SELECT count(*) FROM messages WHERE recipient_id=%s AND (read_at IS NULL OR delivered_at IS NULL)",
+                        (bob_id,),
+                    ).fetchone()[0]
+                    self.assertEqual(pending, 0)
                 found = client.get("/search", params={"q": "pgrtbob" + suffix}, headers={"Authorization": "Bearer " + alice_token})
                 self.assertEqual(found.status_code, 200, found.text)
                 self.assertIn(bob_id, {profile["id"] for profile in found.json()["profiles"]})

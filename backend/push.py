@@ -16,12 +16,9 @@ def payload(token, message, sender):
     text = message['text'] or '📎 Вложение'
     return {'message': {
         'token': token,
-        'notification': {'title': sender['name'], 'body': text[:180] + ('…' if len(text) > 180 else '')},
-        'data': {'peer_id': sender['id'], 'message_id': str(message['id'])},
-        'android': {'priority': 'HIGH', 'ttl': '86400s', 'restricted_package_name': 'com.mukimov.salom',
-                    'notification': {'channel_id': 'salom_messages_ding_v1', 'icon': 'ic_notification',
-                    'color': '#FFC400', 'sound': 'salom_ding', 'tag': 'salom-peer-' + sender['id'],
-                                     'visibility': 'PRIVATE'}},
+        'data': {'peer_id': sender['id'], 'message_id': str(message['id']), 'title': sender['name'],
+                 'body': text[:180] + ('…' if len(text) > 180 else '')},
+        'android': {'priority': 'HIGH', 'ttl': '86400s', 'restricted_package_name': 'com.mukimov.salom'},
     }}
 
 class PushDispatcher:
@@ -130,7 +127,7 @@ class PushDispatcher:
                 count = db.execute("SELECT COUNT(*) AS count FROM call_sessions WHERE callee_id=? AND state='missed' AND seen_at IS NULL", (call['callee_id'],)).fetchone()['count']
                 data = {'type':'missed_call','call_id':call['id'],'caller_id':call['caller_id'],'caller_name':caller['name'][:80],'unread_count':str(count)}
             else:
-                data = {'type': 'incoming_call', 'call_id': call['id'], 'caller_id': call['caller_id'], 'caller_name': caller['name'][:80]}
+                data = {'type': 'incoming_call', 'call_id': call['id'], 'caller_id': call['caller_id'], 'caller_name': caller['name'][:80], 'mode': call['media_mode']}
         code = 'NETWORK'
         permanent = False
         invalid_token = False
