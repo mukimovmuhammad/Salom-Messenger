@@ -42,7 +42,8 @@ public partial class SetupWindow : Window
         {
             await Task.Run(InstallFiles);
             var exe = Path.Combine(_installPath, "Salom.Desktop.exe");
-            using var app = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = _installPath });
+            using var app = Process.Start(new ProcessStartInfo(exe, _update ? "--update-installed" : "")
+                { UseShellExecute = true, WorkingDirectory = _installPath });
             if (_update) return;
             // Keep shortcut paths ASCII: WScript.Shell can otherwise use the
             // system ANSI code page and replace Cyrillic characters with '?'.

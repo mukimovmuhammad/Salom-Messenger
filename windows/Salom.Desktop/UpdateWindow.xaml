@@ -11,7 +11,7 @@
         <ProgressBar x:Name="Progress" Height="5" Foreground="#FFC400" Background="#293544"
                      Margin="0,8,0,0" Visibility="Collapsed"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
-            <Button Content="Закрыть" IsCancel="True" Padding="13,8" Margin="0,0,8,0"/>
+            <Button Content="В фон" Click="Hide_Click" Padding="13,8" Margin="0,0,8,0"/>
             <Button x:Name="Action" Content="Проверить" IsDefault="True"
                     Padding="13,8" Background="#FFC400" Foreground="#11161D" Click="Action_Click"/>
         </StackPanel>

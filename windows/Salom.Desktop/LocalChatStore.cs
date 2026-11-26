@@ -174,4 +174,4 @@ internal sealed class LocalChatStore
 }
 
 internal sealed record DesktopOutgoing(Guid Id, ChatItem Peer, string Text, long? ReplyId, DateTime Created,
-    string? AudioPath = null, VoiceClip? Voice = null);
+    string? AudioPath = null, VoiceClip? Voice = null, string? PhotoPath = null);

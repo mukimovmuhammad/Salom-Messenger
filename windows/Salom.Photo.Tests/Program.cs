@@ -35,6 +35,44 @@ try
         && !PhotoDecoder.IsPhoto("video/mp4", "movie.jpg") && !PhotoDecoder.IsPhoto(null, "document.pdf"),
         "Classification must prefer the server MIME and support legacy filenames");
 
+    Exception? clipboardError = null;
+    var clipboardThread = new Thread(() =>
+    {
+        try
+        {
+            var copied = new System.Windows.DataObject();
+            copied.SetData("PNG", File.ReadAllBytes(Path.Combine(temporary.FullName, "photo-Png.cache")));
+            var draft = ClipboardPhoto.Read(copied);
+            Check(draft is { IsFrozen: true, PixelWidth: 120, PixelHeight: 60 }, "Clipboard PNG could not be previewed");
+            var output = ClipboardPhoto.Save(draft!, temporary.FullName, Guid.NewGuid());
+            Check(PhotoDecoder.Decode(output, 120).PixelHeight == 60, "Queued PNG could not be decoded as a photo");
+
+            var screenshot = new System.Windows.DataObject();
+            screenshot.SetData(System.Windows.DataFormats.Bitmap, draft);
+            Check(ClipboardPhoto.Read(screenshot)?.PixelWidth == 120, "Clipboard bitmap could not be previewed");
+            var file = new System.Windows.DataObject();
+            file.SetData(System.Windows.DataFormats.FileDrop, new[] { output });
+            Check(ClipboardPhoto.Read(file)?.PixelWidth == 120, "Copied photo file could not be previewed");
+            var text = new System.Windows.DataObject();
+            text.SetText("Обычный текст");
+            Check(ClipboardPhoto.Read(text) == null, "Text must keep its normal paste behavior");
+
+            var body = new MessageLinks
+            {
+                Body = "Смотри (https://example.org/page), www.example.com и javascript:alert(1)",
+            };
+            var links = body.Inlines.OfType<System.Windows.Documents.Hyperlink>().Select(link => link.NavigateUri.AbsoluteUri).ToArray();
+            Check(links.SequenceEqual(new[] { "https://example.org/page", "https://www.example.com/" }),
+                "Message links must preserve ordinary URLs, punctuation and allowed schemes");
+        }
+        catch (Exception failure) { clipboardError = failure; }
+    });
+    clipboardThread.SetApartmentState(ApartmentState.STA);
+    clipboardThread.Start();
+    clipboardThread.Join();
+    if (clipboardError != null) throw new Exception("Clipboard checks failed", clipboardError);
+    Console.WriteLine("Clipboard checks passed: PNG, bitmap, copied file, text and PNG export.");
+
     const string owner = "test-api\nowner";
     var calls = 0;
     var corruptFirst = false;
@@ -94,6 +132,11 @@ try
     Check(store.Outbox(owner).Count == 1, "Another account removed the queued item");
     reopened.RemoveOutgoing(owner, outgoing.Id);
     Check(store.Outbox(owner).Count == 0, "Confirmed outbox item not removed");
+
+    var photoOutgoing = new DesktopOutgoing(Guid.NewGuid(), peer, "Подпись", 17, DateTime.Now, PhotoPath: gif);
+    store.Enqueue(owner, photoOutgoing);
+    Check(reopened.Outbox(owner, peer.Id).Single() == photoOutgoing, "Photo outbox lost its photo, caption, reply or message ID");
+    reopened.RemoveOutgoing(owner, photoOutgoing.Id);
 
     store.Save(owner, peer.Id, [new ChatMessage(22, "QA edited", true, DateTime.Now, replyText: "reply", replyId: 17, edited: true, myReaction: "👍", peerReaction: "👍")]);
     store.SaveCursor(owner, peer.Id, 22, 9, 5);

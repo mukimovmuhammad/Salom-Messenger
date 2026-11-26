@@ -35,6 +35,7 @@ internal sealed class DesktopClient
     }
 
     internal bool HasSession => !string.IsNullOrWhiteSpace(_session);
+    internal string? NotificationOwner => HasSession ? _profileId : null;
     internal string? PhotoCacheScope => HasSession && !string.IsNullOrWhiteSpace(_profileId)
         ? _apiBase.AbsoluteUri + "\n" + _profileId : null;
     internal async Task SignInAsync(string name, string username)
@@ -143,6 +144,13 @@ internal sealed class DesktopClient
         return ParseMessage(json.RootElement);
     }
 
+    internal async Task MarkNotificationsReadAsync(string peerId, CancellationToken token)
+    {
+        using var response = await SendAsync(HttpMethod.Get,
+            $"messages?peer_id={Uri.EscapeDataString(peerId)}&after={long.MaxValue}&receipts_after={long.MaxValue}&events_after={long.MaxValue}",
+            null, true, token);
+    }
+
     internal async Task DeleteMessageAsync(long messageId, bool forEveryone)
     {
         using var result = await SendAsync(HttpMethod.Delete, $"messages/{messageId}?scope={(forEveryone ? "everyone" : "me")}", null, true);
@@ -165,6 +173,8 @@ internal sealed class DesktopClient
         return result.RootElement.GetProperty("cleared_through").GetInt64();
     }
 
+    internal const long MaxAttachmentBytes = 25L * 1024 * 1024;
+
     internal async Task<ChatMessage> SendAttachmentAsync(ChatItem peer, string path, string text,
         Guid transferId, IProgress<int> progress, CancellationToken cancellationToken, long? replyId = null, VoiceClip? voice = null)
     {
@@ -173,8 +183,7 @@ internal sealed class DesktopClient
         var token = timeout.Token;
         var scope = PhotoCacheScope ?? throw new InvalidOperationException("Сначала войди в аккаунт.");
         await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, useAsync: true);
-        const long maxFileBytes = 25L * 1024 * 1024;
-        if (file.Length is <= 0 or > maxFileBytes) throw new InvalidOperationException("Файл должен быть размером от 1 байта до 25 МБ.");
+        if (file.Length is <= 0 or > MaxAttachmentBytes) throw new InvalidOperationException("Файл должен быть размером от 1 байта до 25 МБ.");
         var digest = await SHA256.HashDataAsync(file, token);
         file.Position = 0;
         var uploadPath = "attachments?peer_id=" + Uri.EscapeDataString(peer.Id) + "&name=" +

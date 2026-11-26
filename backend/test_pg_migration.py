@@ -24,6 +24,7 @@ class PostgresMigrationRehearsalTests(unittest.TestCase):
                 with app.connect() as db:
                     db.execute("INSERT INTO profiles(id,token_hash,name,username,username_key,is_active,created,updated) VALUES(?,?,?,?,?,1,?,?)", (a, "a" * 64, "Synthetic A", "syntha", "syntha", now, now))
                     db.execute("INSERT INTO profiles(id,token_hash,name,username,username_key,is_active,created,updated) VALUES(?,?,?,?,?,1,?,?)", (b, "b" * 64, "Synthetic B", "synthb", "synthb", now, now))
+                    db.execute("UPDATE profiles SET about=? WHERE id=?", ("Салом из теста", a))
                     db.execute("INSERT INTO registrations(ip,at) VALUES(?,?)", ("192.0.2.10", now))
                     db.execute("INSERT INTO attachments(id,owner_id,peer_id,name,mime,size,created,ready,kind,duration_ms,waveform) VALUES(?,?,?,?,?,?,?,1,?,?,?)", (file_id, a, b, "test.png", "image/png", 123, now, "photo", 0, "[]"))
                     db.execute("INSERT INTO conversation_clears(owner_id,peer_id,through_id) VALUES(?,?,?)", (a, b, 2))
@@ -46,6 +47,7 @@ class PostgresMigrationRehearsalTests(unittest.TestCase):
             self.assertEqual(report["message_reactions"]["rows"], 1)
             self.assertEqual(report["session_devices"]["rows"], 1)
             with psycopg.connect(os.environ["SALOM_PG_TEST_DSN"]) as pg:
+                self.assertEqual(pg.execute("SELECT about FROM profiles WHERE id=%s", (a,)).fetchone()[0], "Салом из теста")
                 next_id = pg.execute(
                     "INSERT INTO messages(sender_id,recipient_id,client_id,text,created) VALUES(%s,%s,%s,%s,%s) RETURNING id",
                     (a, b, str(uuid.uuid4()), "sequence check", now)

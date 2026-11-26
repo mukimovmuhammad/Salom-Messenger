@@ -104,9 +104,17 @@ internal class DirectoryClient(context: Context) {
         finally { connection.disconnect() }
     }
 
-    suspend fun publish(name: String, username: String): SalomAccount = withContext(Dispatchers.IO) {
+    suspend fun publish(name: String, username: String, about: String? = null): SalomAccount = withContext(Dispatchers.IO) {
         mutex.withLock {
-            val result = request("profile", JSONObject().put("device_id", ownId).put("name", name.trim()).put("username", username.trim()))
+            val details = JSONObject().put("device_id", ownId).put("name", name.trim()).put("username", username.trim())
+            if (about != null) details.put("about", about)
+            val result = try {
+                request("profile", details)
+            } catch (failure: DirectoryException) {
+                if (about == null || failure.status != 422) throw failure
+                details.remove("about")
+                request("profile", details)
+            }
             syncedSignature = name.trim() to username.trim()
             account(result)
         }
@@ -149,7 +157,9 @@ internal class DirectoryClient(context: Context) {
         (0 until array.length()).map { account(array.getJSONObject(it)) }
     }
 
-    private fun account(json: JSONObject) = SalomAccount(json.getString("id"), json.getString("name"), json.optString("username"), "", json.optBoolean("is_active"), json.optString("avatar_url"))
+    private fun account(json: JSONObject) = SalomAccount(json.getString("id"), json.getString("name"),
+        json.optString("username"), "", json.optBoolean("is_active"), json.optString("avatar_url"),
+        about = json.opt("about") as? String, joinedAt = json.optLong("joined_at").takeIf { it > 0 })
 
     suspend fun sendMessage(peerId: String, text: String, clientId: String, attachment: Attachment? = null, replyToId: Long? = null): Message = withContext(Dispatchers.IO) {
         syncLocal()

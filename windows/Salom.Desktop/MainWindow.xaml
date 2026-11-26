@@ -130,19 +130,19 @@
                                             <TextBlock Text="{Binding ReplyText}" Foreground="#D5DEE8" TextTrimming="CharacterEllipsis" MaxWidth="540"/>
                                         </StackPanel>
                                     </Border>
-                                    <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" IsTabStop="False"
+                                    <local:MessageLinks Body="{Binding Text}"
                                              Visibility="{Binding HasText, Converter={StaticResource BoolVisibility}}"
-                                             TextWrapping="Wrap" FontSize="14" Foreground="#EDF1F5" Background="Transparent" Padding="0"
+                                             TextWrapping="Wrap" FontSize="14" Foreground="#EDF1F5" Background="Transparent"
                                              >
-                                        <TextBox.Style>
-                                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                        <local:MessageLinks.Style>
+                                            <Style TargetType="local:MessageLinks">
                                                 <Setter Property="ContextMenu" Value="{StaticResource MessageActions}"/>
                                                 <Style.Triggers><DataTrigger Binding="{Binding Id}" Value="0">
                                                     <Setter Property="ContextMenu" Value="{StaticResource OutgoingActions}"/>
                                                 </DataTrigger></Style.Triggers>
                                             </Style>
-                                        </TextBox.Style>
-                                    </TextBox>
+                                        </local:MessageLinks.Style>
+                                    </local:MessageLinks>
                                     <Grid>
                                         <Button Content="{Binding AttachmentName}" Tag="{Binding}"
                                                 HorizontalAlignment="Left" Background="#334353" Foreground="#EDF1F5"
@@ -168,7 +168,22 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-                <Border Grid.Row="2" Background="#151C24" Padding="12" BorderBrush="#27313D" BorderThickness="0,1,0,0"><StackPanel><TextBlock x:Name="VoiceRecordingStatus" Visibility="Collapsed" Foreground="#FFC400" Margin="8,0,0,6"/><Border x:Name="ReplyBanner" Visibility="Collapsed" Background="#273442" CornerRadius="8" Padding="9,6" Margin="0,0,0,7"><DockPanel><Button DockPanel.Dock="Right" Width="30" Height="28" Background="#334353" Foreground="#EDF1F5" Content="×" Padding="0" Click="CancelReply_Click" AutomationProperties.Name="Отменить ответ"/><StackPanel Margin="0,0,8,0"><TextBlock x:Name="ReplyLabel" Foreground="#FFC400" FontSize="11"/><TextBlock x:Name="ReplyText" Foreground="#EDF1F5" TextTrimming="CharacterEllipsis"/></StackPanel></DockPanel></Border><Border Background="#222C38" CornerRadius="22" BorderBrush="#374656" BorderThickness="1" Padding="6,4"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="MessageBox" Background="Transparent" VerticalContentAlignment="Center" MinHeight="38" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Hidden" MaxHeight="140" Padding="12,7" PreviewKeyDown="MessageBox_KeyDown"/><Button Grid.Column="1" x:Name="FileButton" Content="Файл" Margin="6,0,0,0" Background="#334353" Foreground="#EDF1F5" Click="File_Click"/><Button Grid.Column="2" x:Name="SendButton" Width="40" Height="40" Padding="10" Margin="6,0,0,0" ToolTip="Отправить · Enter" Click="Send_Click"><Viewbox><Path Stroke="#11161D" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M22,2 L15,22 L11,13 L2,9 Z M22,2 L11,13"/></Viewbox></Button>
+                <Border Grid.Row="2" Background="#151C24" Padding="12" BorderBrush="#27313D" BorderThickness="0,1,0,0"><StackPanel><TextBlock x:Name="VoiceRecordingStatus" Visibility="Collapsed" Foreground="#FFC400" Margin="8,0,0,6"/><Border x:Name="ReplyBanner" Visibility="Collapsed" Background="#273442" CornerRadius="8" Padding="9,6" Margin="0,0,0,7"><DockPanel><Button DockPanel.Dock="Right" Width="30" Height="28" Background="#334353" Foreground="#EDF1F5" Content="×" Padding="0" Click="CancelReply_Click" AutomationProperties.Name="Отменить ответ"/><StackPanel Margin="0,0,8,0"><TextBlock x:Name="ReplyLabel" Foreground="#FFC400" FontSize="11"/><TextBlock x:Name="ReplyText" Foreground="#EDF1F5" TextTrimming="CharacterEllipsis"/></StackPanel></DockPanel></Border>
+                    <Border x:Name="ClipboardPhotoBanner" Visibility="Collapsed" Background="#273442"
+                            CornerRadius="12" Padding="8" Margin="0,0,0,7">
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Left" Width="62" Height="48" Background="#17212B" CornerRadius="6" Margin="0,0,10,0">
+                                <Image x:Name="ClipboardPhotoImage" Stretch="Uniform" AutomationProperties.Name="Предпросмотр фото"/>
+                            </Border>
+                            <Button DockPanel.Dock="Right" Width="34" Height="34" Padding="0" Background="#334353" Foreground="#EDF1F5"
+                                    Content="×" Click="RemoveClipboardPhoto_Click" AutomationProperties.Name="Убрать фото"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Фото из буфера" FontWeight="SemiBold"/>
+                                <TextBlock Text="Можно добавить подпись" Foreground="#BDCAD7" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Background="#222C38" CornerRadius="22" BorderBrush="#374656" BorderThickness="1" Padding="6,4"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="MessageBox" Background="Transparent" VerticalContentAlignment="Center" MinHeight="38" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Hidden" MaxHeight="140" Padding="12,7" PreviewKeyDown="MessageBox_KeyDown"/><Button Grid.Column="1" x:Name="FileButton" Content="Файл" Margin="6,0,0,0" Background="#334353" Foreground="#EDF1F5" Click="File_Click"/><Button Grid.Column="2" x:Name="SendButton" Width="40" Height="40" Padding="10" Margin="6,0,0,0" ToolTip="Отправить · Enter" Click="Send_Click"><Viewbox><Path Stroke="#11161D" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M22,2 L15,22 L11,13 L2,9 Z M22,2 L11,13"/></Viewbox></Button>
 <Button Grid.Column="3" x:Name="MicButton" Width="40" Height="40" Padding="10" Margin="6,0,0,0"
                         Background="#334353" ToolTip="Удерживай для записи · правый клик для выбора микрофона"
                         AutomationProperties.Name="Удерживай для записи голосового"

@@ -28,8 +28,8 @@ android/.android-home/
 windows/**/bin/
 windows/**/artifacts/
 windows/Salom.Setup/payload/
-outputs/*.apk
-outputs/*.exe
+/outputs/
+*wpftmp.csproj
 windows/**/obj/
 .kotlin/
 build/
@@ -73,6 +73,9 @@ id_ed25519
 *.pfx
 *.jks
 *.keystore
+*.dpapi
+salom.oauth.json
+client_secret*.json
 # Local backups and database exports
 backups/
 *.sql.gz

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.mukimov.salom",
+      "sha256_cert_fingerprints": [
+        "75:6D:E1:0E:71:02:DF:A0:A2:42:66:71:2E:68:3E:31:A8:6F:A7:E2:BD:9B:AC:26:73:1B:5C:BF:B1:8E:D4:69"
+      ]
+    }
+  }
+]

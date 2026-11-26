@@ -14,7 +14,8 @@ public partial class App : System.Windows.Application
     private bool _openingFromBackground;
     private bool _sessionEnding;
     private Guid? _pendingPeer;
-    private TaskCompletionSource<Guid>? _coldActivation;
+    private TaskCompletionSource<Guid?>? _coldActivation;
+    private bool _openUpdate;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -37,9 +38,13 @@ public partial class App : System.Windows.Application
             }
 
             if (activatedByToast && _coldActivation is { } activation)
-                _pendingPeer = await activation.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            {
+                _pendingPeer = await activation.Task.WaitAsync(TimeSpan.FromSeconds(25));
+                if (_pendingPeer == null && !_openUpdate) { Shutdown(); return; }
+            }
             if (e.Args.Length == 2 && e.Args[0] == PeerSwitch && Guid.TryParse(e.Args[1], out var peer))
                 _pendingPeer = peer;
+            if (e.Args.SequenceEqual(new[] { "--open-update" })) _openUpdate = true;
 
             _instance = DesktopInstance.Acquire(executable, foreground: true);
             if (_instance == null) { Shutdown(); return; }
@@ -52,6 +57,8 @@ public partial class App : System.Windows.Application
             };
             if (_pendingPeer is { } initialPeer) window.ActivateNotification(initialPeer);
             window.Show();
+            if (_openUpdate) window.OpenUpdate();
+            if (e.Args.SequenceEqual(new[] { "--update-installed" })) DesktopUpdateToast.Installed();
         }
         catch (Exception error)
         {
@@ -63,9 +70,35 @@ public partial class App : System.Windows.Application
     private void ToastActivated(ToastNotificationActivatedEventArgsCompat activation)
     {
         var args = ToastArguments.Parse(activation.Argument);
-        if (!args.TryGetValue("peer", out var value) || !Guid.TryParse(value, out var peer)) return;
-        _ = Dispatcher.InvokeAsync(() =>
+        if (args.TryGetValue("openUpdate", out _))
         {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                _openUpdate = true;
+                if (_background && !_openingFromBackground) _openingFromBackground = StartProcess("--open-update");
+                if (MainWindow is MainWindow window) window.OpenUpdate();
+                _coldActivation?.TrySetResult(null);
+            });
+            return;
+        }
+        if (!args.TryGetValue("peer", out var value) || !Guid.TryParse(value, out var peer))
+        {
+            _coldActivation?.TrySetResult(null);
+            return;
+        }
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            if (args.TryGetValue("action", out var action))
+            {
+                try { await DesktopNotificationActions.HandleAsync(args, activation, peer, action); }
+                catch (Exception error)
+                {
+                    Trace.TraceWarning("SALOM notification action: {0}", error.GetType().Name);
+                    try { DesktopNotificationActions.ShowError(peer); } catch (Exception) { }
+                }
+                finally { _coldActivation?.TrySetResult(null); }
+                return;
+            }
             if (_background)
             {
                 if (_openingFromBackground || string.IsNullOrWhiteSpace(SessionVault.Read().Token)) return;

@@ -11,7 +11,8 @@ internal data class AppRelease(val version: String, val code: Long, val minSdk: 
         val uri = URI(url)
         require(uri.scheme == "https" && uri.host == "mukimov.site" && uri.port in listOf(-1, 443))
         require(uri.userInfo == null && uri.query == null && uri.fragment == null)
-        require(uri.rawPath == "/salom/salom-$version.apk" || uri.rawPath == "/salom/salom-latest.apk")
+        require(uri.rawPath == "/salom/salom-$version.apk" || uri.rawPath == "/salom/salom-latest.apk" ||
+            listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").any { uri.rawPath == "/salom/salom-$version-$it.apk" })
     }
     val displayVersion: String get() = version + if (displayName.isBlank()) "" else " $displayName"
 }

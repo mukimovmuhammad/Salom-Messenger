@@ -103,12 +103,12 @@ internal class MediaFiles(private val context: Context, private val directory: D
             file
         }
     }
-    suspend fun bitmap(attachment: Attachment) = withContext(Dispatchers.IO) {
+    suspend fun bitmap(attachment: Attachment, maximumEdge: Int = 1000) = withContext(Dispatchers.IO) {
         val file = file(attachment)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
         var sample = 1
-        while (bounds.outWidth / sample > 1000 || bounds.outHeight / sample > 1000) sample *= 2
+        while (bounds.outWidth / sample > maximumEdge || bounds.outHeight / sample > maximumEdge) sample *= 2
         BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
     suspend fun removeLocal(attachment: Attachment) = withContext(Dispatchers.IO) { target(attachment).delete(); Unit }

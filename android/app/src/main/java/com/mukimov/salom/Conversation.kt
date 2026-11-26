@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
@@ -35,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
@@ -105,6 +107,9 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
     var clearing by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var showPeerProfile by remember(person.id) { mutableStateOf(false) }
+    var previewAttachment by remember(person.id) { mutableStateOf<Attachment?>(null) }
+    var reactionTarget by remember(person.id) { mutableStateOf<Message?>(null) }
+    var composerFocused by remember(person.id) { mutableStateOf(false) }
     var attachmentsMenu by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableFloatStateOf(0f) }
     var transferJob by remember { mutableStateOf<Job?>(null) }
@@ -921,7 +926,8 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         else -> "queued"
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        ChatMessage(queued.toMessage(status), bubbleWidth, media, audio, false, peerName = person.name)
+                        ChatMessage(queued.toMessage(status), bubbleWidth, media, audio, false, peerName = person.name,
+                            onPreview = { previewAttachment = it })
                         if (status == "failed") TextButton(enabled = !sending, onClick = {
                             if (pausedUploadId == queued.clientId) pausedUploadId = null
                             blockedIds = blockedIds - queued.clientId
@@ -935,6 +941,8 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                 androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
                     ChatMessage(message, maxWidth * .82f, media, audio, newer != null && newer.mine == message.mine && newer.time == message.time,
                         onReply = { if (!saved) replyingTo = message }, onLongPress = { messageActions = message },
+                        onReact = if (!saved && message.remoteId > 0) ({ reactionTarget = message }) else null,
+                        onPreview = { previewAttachment = it },
                         onLocation = { openLocationMap(it) }, peerName = person.name, onQuote = { quoteId ->
                             val index = messages.asReversed().indexOfFirst { it.remoteId == quoteId }
                             if (index < 0) sendError = "Исходное сообщение недоступно в загруженной истории."
@@ -971,8 +979,12 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         if (preparing || clearing) LinearProgressIndicator(Modifier.fillMaxWidth(),color=Yellow)
         Row(Modifier.fillMaxWidth().padding(horizontal=7.dp,vertical=5.dp),verticalAlignment=Alignment.Bottom) {
             val inputShape=RoundedCornerShape(24.dp)
-            Row(Modifier.weight(1f).heightIn(min=40.dp).clip(inputShape).background(chatSurface)
-                .border(.7.dp,if (dark) Color.White.copy(alpha=.09f) else Color.Black.copy(alpha=.07f),inputShape)
+            val composerBorder by animateColorAsState(
+                if (composerFocused && !recording) Yellow.copy(alpha = .62f) else
+                    if (dark) Color.White.copy(alpha = .09f) else Color.Black.copy(alpha = .07f),
+                animationSpec = tween(180), label = "composer-focus")
+            Row(Modifier.weight(1f).animateContentSize(tween(170)).heightIn(min=40.dp).clip(inputShape).background(chatSurface)
+                .border(.7.dp,composerBorder,inputShape)
                 .padding(start=if(recording) 0.dp else 14.dp),verticalAlignment=Alignment.CenterVertically) {
                 if (recording) {
                     ChatAction("close","Отменить запись",compact=true) { cancelVoice() }
@@ -981,10 +993,22 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                     Waveform(liveLevels,0f,Yellow,Modifier.weight(1f).height(26.dp).padding(end=12.dp))
                     Text("← Отмена", maxLines = 1, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    BasicTextField(draft,{draft=it.take(4000)},enabled=!busy,modifier=Modifier.weight(1f).padding(vertical=8.dp),textStyle=TextStyle(color=if(dark) Color(0xFFEEF2F5) else Ink,fontSize=15.sp,lineHeight=20.sp),cursorBrush=SolidColor(Yellow),maxLines=4,decorationBox={inner ->
-                        if(draft.isEmpty()) Text(if(selected==null) "Сообщение" else "Подпись",color=MaterialTheme.colorScheme.onSurfaceVariant,fontSize=15.sp,lineHeight=20.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
-                        inner()
-                    })
+                    BasicTextField(draft, { draft = it.take(4000) }, enabled = !busy,
+                        modifier = Modifier.weight(1f).onFocusChanged { composerFocused = it.isFocused }.padding(vertical = 8.dp),
+                        textStyle = TextStyle(color = if (dark) Color(0xFFEEF2F5) else Ink, fontSize = 15.sp, lineHeight = 20.sp),
+                        cursorBrush = SolidColor(Yellow), maxLines = 4, decorationBox = { inner ->
+                            Box {
+                                val placeholderOpacity by animateFloatAsState(
+                                    if (draft.isEmpty()) 1f else 0f, tween(120), label = "composer-placeholder")
+                                if (placeholderOpacity > .01f) {
+                                    Text(if (selected == null) "Сообщение" else "Подпись",
+                                        modifier = Modifier.graphicsLayer { alpha = placeholderOpacity },
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp,
+                                        lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                inner()
+                            }
+                        })
                     Box {
                         ChatAction("attach","Прикрепить файл",enabled=!busy) { attachmentsMenu=true }
                     }
@@ -1105,8 +1129,10 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
         TextButton(onClick={runLocationAction("live")}) { Text("Начать передачу") }
     }},dismissButton={TextButton(onClick={showLocationOptions=false}) { Text("Отмена") }})
 
-    messageActions?.let { target ->
-        ModalBottomSheet(onDismissRequest={messageActions=null},containerColor=chatSurface) {
+    (reactionTarget ?: messageActions)?.let { target ->
+        val reactionsOnly = reactionTarget != null
+        ModalBottomSheet(onDismissRequest = { reactionTarget = null; messageActions = null }, containerColor = chatSurface) {
+            if (reactionsOnly) Text("Реакция", Modifier.padding(horizontal = 20.dp), fontWeight = FontWeight.SemiBold)
             if (!saved && target.remoteId > 0) {
                 val currentReaction = messages.firstOrNull { it.remoteId == target.remoteId }?.myReaction
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -1114,6 +1140,7 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                         TextButton(
                             modifier = Modifier.weight(1f),
                             onClick = {
+                                reactionTarget = null
                                 messageActions = null
                                 scope.launch {
                                     try {
@@ -1126,11 +1153,14 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
                                     }
                                     catch (_: Exception) { sendError = "Не удалось изменить реакцию. Попробуй ещё раз." }
                                 }
-                            }
-                        ) { Text(emoji, fontSize = 16.sp) }
+                            },
+                            colors = ButtonDefaults.textButtonColors(
+                                containerColor = if (emoji == currentReaction) Yellow.copy(alpha = .22f) else Color.Transparent)
+                        ) { Text(emoji, fontSize = 19.sp) }
                     }
                 }
             }
+            if (!reactionsOnly) {
             Text("Сообщение",modifier=Modifier.padding(horizontal=20.dp,vertical=6.dp),fontSize=17.sp,fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis)
             ListItem(headlineContent={Text("Ответить")},leadingContent={Text("↩",fontSize=22.sp)},modifier=Modifier.clickable { replyingTo=target; editingMessage=null; messageActions=null },colors=ListItemDefaults.colors(containerColor=Color.Transparent))
             ListItem(headlineContent={Text("Копировать")},leadingContent={Text("▢",fontSize=20.sp)},modifier=Modifier.clickable {
@@ -1151,12 +1181,16 @@ internal fun Conversation(person: Person, store: Store, directory: DirectoryClie
             }
             if(target.mine && target.attachment==null) ListItem(headlineContent={Text("Редактировать")},leadingContent={Text("✎",fontSize=20.sp)},modifier=Modifier.clickable { editingMessage=target; replyingTo=null; draft=target.text; selected=null; uploaded=null; messageActions=null },colors=ListItemDefaults.colors(containerColor=Color.Transparent))
             ListItem(headlineContent={Text("Удалить",color=MaterialTheme.colorScheme.error)},leadingContent={Text("⌫",fontSize=20.sp,color=MaterialTheme.colorScheme.error)},modifier=Modifier.clickable { confirmDeleteMessage=target; messageActions=null },colors=ListItemDefaults.colors(containerColor=Color.Transparent))
+            }
             Spacer(Modifier.height(20.dp))
         }
     }
 
     if (showPeerProfile && activeCall == null) {
         PeerProfileDialog(person, directory, peerOnline, onDismiss = { showPeerProfile = false })
+    }
+    if (activeCall == null) previewAttachment?.let { attachment ->
+        AttachmentViewer(attachment, media, onClose = { previewAttachment = null })
     }
 
     confirmDeleteMessage?.let { target ->
@@ -1266,7 +1300,7 @@ private fun TypingDots() {
 @Composable
 internal fun AttachmentBubble(
     attachment: Attachment, media: MediaFiles, contentColor: Color, maxWidth: androidx.compose.ui.unit.Dp,
-    onLongPress: (() -> Unit)?, photoMeta: (@Composable () -> Unit)?
+    onLongPress: (() -> Unit)?, onPreview: ((Attachment) -> Unit)?, photoMeta: (@Composable () -> Unit)?
 ) {
     val scope = rememberCoroutineScope()
     var bitmap by remember(attachment.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
@@ -1275,7 +1309,8 @@ internal fun AttachmentBubble(
     var openJob by remember(attachment.id) { mutableStateOf<Job?>(null) }
     var downloadProgress by remember(attachment.id) { mutableFloatStateOf(0f) }
     var attempt by remember { mutableIntStateOf(0) }
-    val photo = attachment.mime.startsWith("image/")
+    val preview = attachment.previewKind()
+    val photo = preview == PreviewKind.PHOTO
     LaunchedEffect(attachment.id, attempt) {
         if (photo) {
             loading = true
@@ -1287,6 +1322,10 @@ internal fun AttachmentBubble(
     }
     val color = contentColor
     val open: () -> Unit = open@{
+        if (preview != null && onPreview != null) {
+            onPreview(attachment)
+            return@open
+        }
         if (loading) return@open
         if (photo && error != null && bitmap == null) attempt++ else {
             openJob = scope.launch {

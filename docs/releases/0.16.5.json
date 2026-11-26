@@ -1,0 +1,18 @@
+{
+  "version": "0.16.5",
+  "versionCode": 34,
+  "minSdk": 24,
+  "releaseDate": "2026-11-26",
+  "releaseNotes": [
+    "Ссылки в чатах Android и Windows теперь открываются по нажатию.",
+    "Загрузка обновления продолжается с сохранённого места после обрыва. Проверенный установщик используется повторно.",
+    "На Windows загрузку можно свернуть, а на Android она работает через системную очередь."
+  ],
+  "sha256": "27e69b2ce599fa4c87f3ab0f7af93c47c687806b2bcd8c5c002f0a50771caa96",
+  "windowsFile": "SALOM-0.16.5-Release-Setup.exe",
+  "windowsSha256": "d0c4e7edc07c778fef87d9458eec848e04b156ee75ca88737e9c9c1920647d29",
+  "androidVariants": {
+    "arm64-v8a": "ded232709c52d21f73c3e0ff5e28774bc99f8d88eca6fb2e0e40662a830e1cf0",
+    "armeabi-v7a": "fcae0966cbec24acc3396a8ee2bc74f5075769e4a63f8eb6a55c19867930c4c9"
+  }
+}

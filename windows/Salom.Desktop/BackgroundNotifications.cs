@@ -53,7 +53,7 @@ internal static class BackgroundNotifications
                         if (message.IsMine || !Guid.TryParse(incoming.GetProperty("sender_id").GetString(), out var peer) ||
                             !seen.Add(message.Id)) continue;
                         var preview = preferences.PrivateNotificationPreview ? "Новое сообщение" : message.Preview;
-                        DesktopMessageToast.TryShow(message.Id, peer.ToString(), "Новое сообщение", preview);
+                        DesktopMessageToast.TryShow(message.Id, peer.ToString(), "Новое сообщение", preview, client.NotificationOwner);
                     }
                 }
                 finally
@@ -84,13 +84,26 @@ internal static class BackgroundNotifications
 
 internal static class DesktopMessageToast
 {
-    internal static bool TryShow(long messageId, string peerId, string title, string body)
+    internal static bool TryShow(long messageId, string peerId, string title, string body, string? owner)
     {
         try
         {
-            new ToastContentBuilder().AddArgument("peer", peerId).AddText("Салом · " + title)
-                .AddText(body.Length > 110 ? body[..110] + "…" : body)
-                .Show(toast => { toast.Tag = messageId.ToString(); toast.Group = "messages"; });
+            var toast = new ToastContentBuilder().AddArgument("peer", peerId).AddText("Салом · " + title)
+                .AddText(body.Length > 110 ? body[..110] + "…" : body);
+            if (Guid.TryParse(owner, out var ownerId) && Guid.TryParse(peerId, out var peer))
+            {
+                var muted = DesktopNotificationActions.Muted(ownerId, peer);
+                ToastButton Button(string text, string action) => new ToastButton().SetContent(text)
+                    .AddArgument("owner", ownerId.ToString()).AddArgument("action", action)
+                    .AddArgument("message", messageId.ToString()).AddArgument("request", Guid.NewGuid().ToString())
+                    .SetBackgroundActivation();
+                toast.AddInputTextBox("reply", "Написать ответ")
+                    .AddButton(Button("Ответить", "reply").SetTextBoxId("reply"))
+                    .AddButton(Button("Прочитано", "read"))
+                    .AddButton(Button(muted ? "Включить звук" : "Без звука", "mute"));
+                if (muted) toast.AddAudio(new ToastAudio { Silent = true });
+            }
+            toast.Show(notification => { notification.Tag = messageId.ToString(); notification.Group = "messages"; });
             return true;
         }
         catch (Exception error)

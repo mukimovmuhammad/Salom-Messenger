@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Net.WebSockets;
 using System.Text.Json;
@@ -38,6 +39,8 @@ public partial class MainWindow : Window
     private ChatMessage? _replyTo;
     private ChatMessage? _editingMessage;
     private bool _savingEdit;
+    private bool _savingClipboardPhoto;
+    private BitmapSource? _clipboardPhoto;
     private bool _historyAction;
     private bool _searchPlaceholder = true;
     private bool _peerOnline;
@@ -71,6 +74,8 @@ public partial class MainWindow : Window
         Photos = new PhotoCache(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SALOM", "PhotoCache"), _client.DownloadPhotoAsync);
         InitializeComponent();
+        System.Windows.DataObject.AddPastingHandler(MessageBox, MessageBox_Pasting);
+        CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, PasteClipboardPhoto, CanPasteClipboardPhoto));
         WindowAppearance.UseDarkCaption(this);
         _trayIcon = new System.Windows.Forms.NotifyIcon
         {
@@ -269,6 +274,7 @@ public partial class MainWindow : Window
         _historyRevision++;
         (_messageCursor, _eventCursor, _clearedThrough) = _store.ReadCursor(scope, chat.Id);
         _removedMessages.Clear();
+        SetClipboardPhoto(null);
         if (_editingMessage != null) MessageBox.Clear();
         _editingMessage = null;
         SetReply(null);
@@ -446,8 +452,10 @@ public partial class MainWindow : Window
             return;
         }
         var preview = body.Length > 110 ? body[..110] + "…" : body;
-        if (!DesktopMessageToast.TryShow(messageId, peerId, title, preview))
+        if (!DesktopMessageToast.TryShow(messageId, peerId, title, preview, _client.NotificationOwner))
         {
+            if (Guid.TryParse(_client.NotificationOwner, out var owner) && Guid.TryParse(peerId, out var peer)
+                && DesktopNotificationActions.Muted(owner, peer)) return;
             _notificationPeer = peerId;
             _trayIcon.ShowBalloonTip(4500, "Салом · " + title, preview, System.Windows.Forms.ToolTipIcon.Info);
         }
@@ -531,6 +539,11 @@ public partial class MainWindow : Window
     private async void Send_Click(object sender, RoutedEventArgs e) => await SendMessageAsync();
     private async void MessageBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            e.Handled = TryPasteClipboardPhoto(System.Windows.Clipboard.GetDataObject);
+            return;
+        }
         if (e.Key != Key.Enter) return;
         e.Handled = true;
         if (ComposerInputPolicy.ShouldSend(true, Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)))
@@ -549,6 +562,11 @@ public partial class MainWindow : Window
     {
         if (_activeChat is not { } chat || PhotoCacheScope is not { } scope) { ShowToast("Сначала выбери чат"); return; }
         var text = MessageBox.Text.Trim();
+        if (_clipboardPhoto is { } photo)
+        {
+            await QueueClipboardPhotoAsync(chat, scope, photo, text);
+            return;
+        }
         if (text.Length == 0) return;
         if (_editingMessage is { } edit)
         {
@@ -577,6 +595,98 @@ public partial class MainWindow : Window
         catch (Exception) { ShowToast("Не удалось сохранить сообщение в очереди. Попробуй ещё раз."); }
     }
 
+    private void CanPasteClipboardPhoto(object sender, CanExecuteRoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, MessageBox)) return;
+        try
+        {
+            if (!System.Windows.Clipboard.ContainsImage() && !System.Windows.Clipboard.ContainsData("PNG")
+                && !System.Windows.Clipboard.ContainsFileDropList()) return;
+            e.CanExecute = true;
+            e.Handled = true;
+        }
+        catch (System.Runtime.InteropServices.ExternalException) { }
+    }
+
+    private void PasteClipboardPhoto(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, MessageBox) && TryPasteClipboardPhoto(System.Windows.Clipboard.GetDataObject))
+            e.Handled = true;
+    }
+
+    private void MessageBox_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (TryPasteClipboardPhoto(() => e.DataObject)) e.CancelCommand();
+    }
+
+    private bool TryPasteClipboardPhoto(Func<System.Windows.IDataObject?> getData)
+    {
+        try
+        {
+            if (getData() is not { } data || ClipboardPhoto.Read(data) is not { } photo) return false;
+            if (_activeChat == null || PhotoCacheScope == null) ShowToast("Сначала выбери чат.");
+            else if (_editingMessage != null) ShowToast("Заверши редактирование, чтобы прикрепить фото.");
+            else SetClipboardPhoto(photo);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            ShowToast(error is InvalidDataException ? error.Message : "Не удалось открыть скопированное фото.");
+            return true;
+        }
+        catch (Exception error) when (error is System.Runtime.InteropServices.ExternalException or FormatException or NotSupportedException or ArgumentException)
+        {
+            ShowToast("Не удалось прочитать фото из буфера. Скопируй его ещё раз.");
+            return true;
+        }
+    }
+
+    private void SetClipboardPhoto(BitmapSource? photo)
+    {
+        _clipboardPhoto = photo;
+        ClipboardPhotoImage.Source = photo;
+        ClipboardPhotoBanner.Visibility = photo == null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void RemoveClipboardPhoto_Click(object sender, RoutedEventArgs e)
+    {
+        SetClipboardPhoto(null);
+        MessageBox.Focus();
+    }
+
+    private async Task QueueClipboardPhotoAsync(ChatItem chat, string scope, BitmapSource photo, string caption)
+    {
+        if (_savingClipboardPhoto) return;
+        _savingClipboardPhoto = true;
+        var reply = _replyTo;
+        var id = Guid.NewGuid();
+        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SALOM", "PhotoOutbox");
+        string? path = null;
+        try
+        {
+            path = await Task.Run(() => ClipboardPhoto.Save(photo, folder, id));
+            if (PhotoCacheScope != scope || _realtimeCancellation?.IsCancellationRequested != false) return;
+            QueueOutgoing(new(id, chat, caption, reply?.Id, DateTime.Now, PhotoPath: path));
+            path = null;
+            if (_activeChat?.Id == chat.Id && ReferenceEquals(_clipboardPhoto, photo))
+            {
+                SetClipboardPhoto(null);
+                if (MessageBox.Text.Trim() == caption) MessageBox.Clear();
+                if (_replyTo == reply) SetReply(null);
+            }
+            _ = DrainOutboxAsync();
+        }
+        catch (Exception error)
+        {
+            ShowToast(error is InvalidDataException ? error.Message : "Не удалось сохранить фото для отправки. Попробуй снова.");
+        }
+        finally
+        {
+            if (path != null) TryDeleteRecording(path);
+            _savingClipboardPhoto = false;
+        }
+    }
+
     private void QueueOutgoing(DesktopOutgoing item)
     {
         var scope = PhotoCacheScope ?? throw new InvalidOperationException();
@@ -594,7 +704,9 @@ public partial class MainWindow : Window
         if (_activeChat?.Id != item.Peer.Id) return;
         if (_messages.Any(message => message.Id > 0 && message.IsMine && message.ClientId == item.Id)) return;
         var previous = _messages.FirstOrDefault(message => message.Id == 0 && message.ClientId == item.Id);
-        var pending = new ChatMessage(0, item.Voice == null ? item.Text : "Голосовое сообщение", true, item.Created,
+        var label = item.Voice != null ? "Голосовое сообщение"
+            : item.PhotoPath != null && item.Text.Length == 0 ? "Фото" : item.Text;
+        var pending = new ChatMessage(0, label, true, item.Created,
             clientId: item.Id) { PendingStatus = status };
         if (previous == null) _messages.Add(pending);
         else _messages[_messages.IndexOf(previous)] = pending;
@@ -616,14 +728,15 @@ public partial class MainWindow : Window
                 TraceOutgoing(item.Id, "http_start", 0);
                 try
                 {
-                    var sent = item.AudioPath == null
+                    var path = item.PhotoPath ?? item.AudioPath;
+                    var sent = path == null
                         ? await _client.SendTextAsync(item.Peer.Id, item.Text, item.Id, item.ReplyId, token)
-                        : await _client.SendAttachmentAsync(item.Peer, item.AudioPath, item.Text, item.Id,
+                        : await _client.SendAttachmentAsync(item.Peer, path, item.Text, item.Id,
                             new Progress<int>(), token, item.ReplyId, item.Voice);
                     TraceOutgoing(item.Id, "http_ack", elapsed.ElapsedMilliseconds);
                     _store.Save(scope, item.Peer.Id, new[] { sent });
                     _store.RemoveOutgoing(scope, item.Id);
-                    if (item.AudioPath != null) TryDeleteRecording(item.AudioPath);
+                    if (path != null) TryDeleteRecording(path);
                     if (PhotoCacheScope == scope && _activeChat?.Id == item.Peer.Id)
                     {
                         AddVisibleMessage(sent);
@@ -842,6 +955,7 @@ public partial class MainWindow : Window
         if (sender is not System.Windows.Controls.MenuItem { DataContext: ChatMessage { CanEdit: true } message }
             || !_messages.Contains(message)) return;
         SetReply(null);
+        SetClipboardPhoto(null);
         _editingMessage = message;
         ReplyBanner.Visibility = Visibility.Visible;
         ReplyLabel.Text = "Редактирование";
@@ -1013,15 +1127,31 @@ public partial class MainWindow : Window
         menu.IsOpen = true;
     }
 
-    private void Update_Click(object sender, RoutedEventArgs e)
+    private UpdateWindow? _updateWindow;
+
+    private void Update_Click(object sender, RoutedEventArgs e) => OpenUpdate();
+
+    internal void OpenUpdate()
+    {
+        RestoreFromTray();
+        if (_updateWindow == null)
+        {
+            var check = new UpdateWindow { Owner = this };
+            _updateWindow = check;
+            check.Closed += (_, _) => _updateWindow = null;
+            check.InstallRequested += InstallUpdate;
+        }
+        _updateWindow.Show();
+        _updateWindow.Activate();
+    }
+
+    private void InstallUpdate(string installer)
     {
         if (CallWindow.Active != null || _transfer != null || _recorder != null)
         {
             ShowToast("Заверши звонок, запись или передачу файла перед обновлением.");
             return;
         }
-        var check = new UpdateWindow { Owner = this };
-        if (check.ShowDialog() != true || check.Installer is not { } installer) return;
         try
         {
             using var setup = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(installer, "--update")
@@ -1044,6 +1174,7 @@ public partial class MainWindow : Window
         _transfer?.Cancel(); _pendingUpload = null;
         _historyRevision++;
         CancelComposerAction();
+        SetClipboardPhoto(null);
         _client.SignOut(); _notificationPeer = null; _pendingNotificationPeer = null; _activeChat = null; _chats.Clear(); _messages.Clear();
         _realtimeCancellation?.Dispose(); _realtimeCancellation = null;
         Workspace.Visibility = Visibility.Collapsed; LoginPane.Visibility = Visibility.Visible;
@@ -1064,6 +1195,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _updateWindow?.Close();
         _incomingPrompt?.EndRemote();
         _activeVoice?.Stop();
         _transfer?.Cancel();

@@ -77,21 +77,42 @@ class MainActivity : ComponentActivity() {
     private val updater by lazy { androidx.lifecycle.ViewModelProvider(this)[AppUpdater::class.java] }
     private var notificationPeer by mutableStateOf<String?>(null)
     private var incomingCall by mutableStateOf<IncomingCallIntent?>(null)
+    private var profileLink by mutableStateOf<ProfileLinkRequest?>(null)
     @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         notificationPeer = intent.getStringExtra("peer_id")
         incomingCall = readCallIntent(intent)
+        val linkedUsername = if (savedInstanceState == null) readProfileLink(intent)
+            else savedInstanceState.getString("pending_profile_username")
+        profileLink = linkedUsername?.let(::ProfileLinkRequest)
         enableEdgeToEdge()
         PushNotifications.createChannel(this)
-        setContent { SalomApp(this, updater, notificationPeer, incomingCall, { notificationPeer = null }) { incomingCall = null } }
+        setContent {
+            SalomApp(this, updater, notificationPeer, incomingCall, profileLink,
+                onNotificationHandled = { notificationPeer = null },
+                onCallIntentHandled = { incomingCall = null },
+                onProfileLinkHandled = { request -> if (profileLink === request) profileLink = null })
+        }
     }
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        readProfileLink(intent)?.let {
+            profileLink = ProfileLinkRequest(it)
+            return
+        }
         notificationPeer = intent.getStringExtra("peer_id")
         incomingCall = readCallIntent(intent)
     }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("pending_profile_username", profileLink?.username)
+    }
+
+    private fun readProfileLink(intent: android.content.Intent) =
+        intent.dataString?.takeIf { intent.action == android.content.Intent.ACTION_VIEW }?.let(ProfileLinks::username)
 
     private fun readCallIntent(intent: android.content.Intent) = intent.getStringExtra("incoming_call_id")?.let { callId ->
         val peerId = intent.getStringExtra("incoming_call_peer") ?: return@let null
@@ -142,8 +163,12 @@ internal class Store(context: Context) {
     }
 }
 
+private class ProfileLinkRequest(val username: String)
+
 @Composable
-private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: String?, incomingCall: IncomingCallIntent?, onNotificationHandled: () -> Unit, onCallIntentHandled: () -> Unit) {
+private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: String?, incomingCall: IncomingCallIntent?,
+    profileLink: ProfileLinkRequest?, onNotificationHandled: () -> Unit, onCallIntentHandled: () -> Unit,
+    onProfileLinkHandled: (ProfileLinkRequest) -> Unit) {
     var credentialVersion by remember { mutableIntStateOf(0) }
     val directory = remember(credentialVersion) { DirectoryClient(context) }
     val store = remember { Store(context) }
@@ -171,6 +196,16 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
     }
     LaunchedEffect(notificationPeer, signedIn) {
         if (signedIn && notificationPeer != null) {
+            if (notificationPeer == UpdateNotifications.OPEN_UPDATES) {
+                if (!CallSessionManager.hasActiveCall()) {
+                    activeChat = null
+                    settingsPage = SettingsPage.UPDATES
+                    settingsReturnTab = tab
+                    tab = 2
+                }
+                onNotificationHandled()
+                return@LaunchedEffect
+            }
             try {
                 val account = directory.peer(notificationPeer)
                 tab = 0
@@ -216,6 +251,32 @@ private fun SalomApp(context: Context, updater: AppUpdater, notificationPeer: St
         }
     }
     val openAccount: (SalomAccount) -> Unit = { account -> activeChat = if (account.id == "self") savedPerson else Person(account.id, account.name, account.name.take(1).uppercase(), Yellow, "", account.username, account.avatarUrl) }
+    LaunchedEffect(profileLink, signedIn, securingAccount, incomingCall, directory) {
+        val request = profileLink ?: return@LaunchedEffect
+        if (!signedIn || securingAccount || incomingCall != null) return@LaunchedEffect
+        try {
+            val ownProfile = request.username.equals(store.text("username"), ignoreCase = true)
+            val callWasActive = CallSessionManager.hasActiveCall()
+            val account = if (ownProfile || callWasActive) null else
+                directory.search(request.username).firstOrNull { it.username.equals(request.username, ignoreCase = true) }
+            if (callWasActive || CallSessionManager.hasActiveCall()) {
+                android.widget.Toast.makeText(context, "Заверши звонок, чтобы открыть ссылку на профиль.",
+                    android.widget.Toast.LENGTH_LONG).show()
+            } else if (ownProfile) {
+                tab = 3
+                activeChat = null
+            } else if (account != null) {
+                tab = 0
+                openAccount(account)
+            } else {
+                android.widget.Toast.makeText(context, "Профиль @${request.username} не найден.",
+                    android.widget.Toast.LENGTH_LONG).show()
+            }
+        } catch (exception: DirectoryException) {
+            android.widget.Toast.makeText(context, exception.message, android.widget.Toast.LENGTH_LONG).show()
+        }
+        onProfileLinkHandled(request)
+    }
     val changeTheme: (Boolean) -> Unit = { dark = it; store.save("dark", if (it) "yes" else "no") }
     val logout: () -> Unit = {
         appScope.launch { AuthClient(context, directory).logout(); activeChat = null; signedIn = false; securingAccount = false; tab = 0 }
@@ -415,6 +476,23 @@ private fun Profile(store: Store, version: Int, directory: DirectoryClient, sync
     var avatarDraft by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var showAppearance by rememberSaveable { mutableStateOf(false) }
     var showAccount by rememberSaveable { mutableStateOf(false) }
+    var showAvatar by rememberSaveable { mutableStateOf(false) }
+    var showShare by rememberSaveable { mutableStateOf(false) }
+    var showProfileMenu by remember { mutableStateOf(false) }
+    val shareUrl = ProfileLinks.shareUrl(username)
+    var profileDetails by remember(directory.ownId) { mutableStateOf<SalomAccount?>(null) }
+    LaunchedEffect(directory) {
+        try { profileDetails = directory.peer(directory.ownId) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* The local profile remains available offline. */ }
+    }
+    val aboutSync = remember(version) { store.text("about_pending") }
+    val serverAbout = profileDetails?.about
+    val visibleAbout = when {
+        aboutSync == "yes" || serverAbout == null -> about
+        aboutSync.isEmpty() && serverAbout.isEmpty() -> about
+        else -> serverAbout
+    }
     var chosenCover by remember(dark) {
         val name = store.text(if (dark) "profile_cover_dark" else "profile_cover_light")
         mutableStateOf(ProfileCover.entries.firstOrNull { it.name == name } ?: ProfileCover.HONEY)
@@ -447,11 +525,33 @@ private fun Profile(store: Store, version: Int, directory: DirectoryClient, sync
                 drawCircle(Color.White.copy(alpha = .24f), size.height * .88f,
                     Offset(size.width * .84f, size.height * .08f), style = Stroke(1.dp.toPx()))
             }
+            Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                Surface(shape = CircleShape, color = palette.surface) {
+                    IconButton(onClick = { showProfileMenu = true },
+                        modifier = Modifier.semantics { contentDescription = "Меню профиля" }) {
+                        ChatGlyph("menu", palette.onSurface)
+                    }
+                }
+                DropdownMenu(expanded = showProfileMenu, onDismissRequest = { showProfileMenu = false }) {
+                    DropdownMenuItem(text = { Text("Сменить фото профиля") }, enabled = !avatarBusy,
+                        onClick = { showProfileMenu = false; choosePhoto() })
+                    DropdownMenuItem(text = { Text("Поделиться профилем") },
+                        onClick = {
+                            showProfileMenu = false
+                            if (shareUrl == null) {
+                                android.widget.Toast.makeText(context, "Сначала укажи имя пользователя в профиле.",
+                                    android.widget.Toast.LENGTH_SHORT).show()
+                                edit = true
+                            } else showShare = true
+                        })
+                }
+            }
             Box(
                 Modifier.align(Alignment.BottomCenter).size(110.dp).shadow(9.dp, CircleShape)
                     .clip(CircleShape).background(palette.surface)
-                    .clickable(enabled = !avatarBusy, role = Role.Button, onClick = choosePhoto)
-                    .semantics { contentDescription = "Сменить фото профиля" },
+                    .clickable(enabled = !avatarBusy, role = Role.Button,
+                        onClick = { if (avatarUrl.isBlank()) choosePhoto() else showAvatar = true })
+                    .semantics { contentDescription = if (avatarUrl.isBlank()) "Добавить фото профиля" else "Посмотреть фото профиля" },
                 contentAlignment = Alignment.Center
             ) {
                 Avatar(Person("me", name, name.trim().take(1).uppercase().ifEmpty { "С" }, Yellow, "", avatarUrl = avatarUrl), 102)
@@ -469,22 +569,16 @@ private fun Profile(store: Store, version: Int, directory: DirectoryClient, sync
                 Text("@$username", modifier = Modifier.padding(top = 4.dp),
                     fontSize = 14.sp, color = palette.onSurfaceVariant, fontWeight = FontWeight.Medium)
             }
-            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = { edit = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)) { Text("Редактировать", textAlign = TextAlign.Center) }
-                FilledTonalButton(onClick = choosePhoto, enabled = !avatarBusy, modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(13.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)) {
-                    Text(if (avatarBusy) "Загрузка…" else "Сменить фото", textAlign = TextAlign.Center)
-                }
-            }
+            Button(onClick = { edit = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                shape = RoundedCornerShape(13.dp)) { Text("Редактировать") }
             avatarMessage?.let { Text(it, color = palette.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center) }
             syncError?.let { Text(it, color = palette.error, fontSize = 12.sp, modifier = Modifier.padding(8.dp)) }
 
             val details = listOfNotNull(
                 phone.takeIf(String::isNotBlank)?.let { "Телефон" to it },
-                email.takeIf(String::isNotBlank)?.let { "Почта" to it },
-                about.takeIf(String::isNotBlank)?.let { "О себе" to it }
+                email.takeIf(String::isNotBlank)?.let { "Email" to it },
+                visibleAbout.takeIf(String::isNotBlank)?.let { "О себе" to it },
+                profileJoinedDate(profileDetails?.joinedAt)?.let { "В Саломе с" to it },
             )
             if (details.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
@@ -552,8 +646,10 @@ private fun Profile(store: Store, version: Int, directory: DirectoryClient, sync
         }
     }
     if (confirmLogout) LogoutConfirmation(onDismiss = { confirmLogout = false }, onLogout = onLogout)
+    if (showAvatar && avatarUrl.isNotBlank()) AvatarViewer(avatarUrl) { showAvatar = false }
+    if (showShare && shareUrl != null) ShareProfileScreen(name, shareUrl) { showShare = false }
     if (edit) {
-        var newName by remember { mutableStateOf(name) }; var newAbout by remember { mutableStateOf(about) }; var newUsername by remember { mutableStateOf(username) }
+        var newName by remember { mutableStateOf(name) }; var newAbout by remember { mutableStateOf(visibleAbout) }; var newUsername by remember { mutableStateOf(username) }
         val usernameValid = newUsername.isEmpty() || newUsername.matches(Regex("[a-zA-Z][a-zA-Z0-9_]{3,23}"))
         var saving by remember { mutableStateOf(false) }
         var saveError by remember { mutableStateOf<String?>(null) }
@@ -564,14 +660,20 @@ private fun Profile(store: Store, version: Int, directory: DirectoryClient, sync
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(newAbout, { newAbout = it.take(160) }, label = { Text("О себе") }, maxLines = 3)
             saveError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
-            Text("Имя и username доступны другим пользователям Салом", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            Text("Имя, username и «О себе» видны в профиле. Email виден только тебе.", fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
         } }, confirmButton = { TextButton(onClick = {
             saving = true; saveError = null
             val saveName = newName.trim(); val saveUsername = newUsername; val saveAbout = newAbout.trim()
             scope.launch {
                 try {
-                    directory.publish(saveName, saveUsername)
+                    val profile = directory.publish(saveName, saveUsername, saveAbout)
+                    profileDetails = profile
                     store.save("name", saveName); store.save("about", saveAbout); store.save("username", saveUsername)
+                    store.save("about_pending", if (profile.about == null) "yes" else "no")
+                    if (profile.about == null && saveAbout.isNotBlank()) {
+                        avatarMessage = "«О себе» сохранено на телефоне. Другие увидят его после обновления сервера и повторного сохранения."
+                    }
                     onChanged(); edit = false
                 } catch (exception: DirectoryException) { saveError = exception.message }
                 finally { saving = false }

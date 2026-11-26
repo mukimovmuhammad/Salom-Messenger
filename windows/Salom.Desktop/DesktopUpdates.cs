@@ -56,47 +56,80 @@ internal sealed class DesktopUpdates(HttpClient http)
     internal async Task<string> DownloadAsync(DesktopRelease release, string folder, IProgress<int> progress, CancellationToken cancellation)
     {
         Directory.CreateDirectory(folder);
-        var partial = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".part");
-        var installer = Path.Combine(folder, "SALOM-update.exe");
-        try
+        var key = Convert.ToHexString(release.Sha256);
+        var installer = Path.Combine(folder, $"SALOM-update-{key}.exe");
+        var partial = installer + ".part";
+        if (File.Exists(installer) && await MatchesAsync(installer, release, cancellation))
         {
-            using var response = await http.GetAsync(release.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellation);
-            if (response.StatusCode != HttpStatusCode.OK) throw new HttpRequestException("Скачать обновление не удалось.");
-            if (response.Content.Headers.ContentLength is { } size && size != release.Size)
+            progress.Report(100);
+            return installer;
+        }
+
+        var offset = File.Exists(partial) ? new FileInfo(partial).Length : 0;
+        if (offset > release.Size)
+        {
+            File.Delete(partial);
+            offset = 0;
+        }
+        if (offset < release.Size)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, release.DownloadUri);
+            request.Headers.AcceptEncoding.ParseAdd("identity");
+            if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation);
+            switch (response.StatusCode)
+            {
+                case HttpStatusCode.OK:
+                    offset = 0;
+                    break;
+                case HttpStatusCode.PartialContent:
+                    var range = response.Content.Headers.ContentRange;
+                    if (range?.Unit != "bytes" || range.From != offset || range.To != release.Size - 1 || range.Length != release.Size)
+                        throw new InvalidDataException("Сервер вернул неверный диапазон обновления.");
+                    break;
+                default:
+                    throw new HttpRequestException("Скачать обновление не удалось.");
+            }
+            if (response.Content.Headers.ContentEncoding.Any(value => !value.Equals("identity", StringComparison.OrdinalIgnoreCase))
+                || response.Content.Headers.ContentLength is { } size && size != release.Size - offset)
                 throw new InvalidDataException("Размер скачиваемого обновления не совпадает с указанным.");
 
             await using var input = await response.Content.ReadAsStreamAsync(cancellation);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var buffer = new byte[64 * 1024];
-            var lastProgress = -1;
-            long total = 0;
-            await using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None, buffer.Length, useAsync: true))
+            var lastProgress = (int)(offset * 100 / release.Size);
+            progress.Report(lastProgress);
+            await using var output = new FileStream(partial, offset > 0 ? FileMode.Append : FileMode.Create,
+                FileAccess.Write, FileShare.None, buffer.Length, useAsync: true);
+            while (offset < release.Size)
             {
-                while (true)
-                {
-                    deadline.CancelAfter(TimeSpan.FromSeconds(35));
-                    var count = await input.ReadAsync(buffer, deadline.Token);
-                    if (count == 0) break;
-                    total += count;
-                    if (total > release.Size) throw new InvalidDataException("Файл обновления больше указанного.");
-                    hash.AppendData(buffer, 0, count);
-                    await output.WriteAsync(buffer.AsMemory(0, count), cancellation);
-                    var percent = (int)(total * 100 / release.Size);
-                    if (percent != lastProgress) { progress.Report(percent); lastProgress = percent; }
-                }
+                deadline.CancelAfter(TimeSpan.FromSeconds(35));
+                var count = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, release.Size - offset)), deadline.Token);
+                if (count == 0) throw new HttpRequestException("Скачивание прервалось. Повтори, чтобы продолжить.");
+                await output.WriteAsync(buffer.AsMemory(0, count), cancellation);
+                offset += count;
+                var percent = (int)(offset * 100 / release.Size);
+                if (percent != lastProgress) { progress.Report(percent); lastProgress = percent; }
             }
-            if (total != release.Size || !CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(), release.Sha256))
-                throw new InvalidDataException("Проверка SHA-256 не прошла. Установщик не будет запущен.");
-            cancellation.ThrowIfCancellationRequested();
-            File.Move(partial, installer, overwrite: true);
-            return installer;
         }
-        finally
+        if (!await MatchesAsync(partial, release, cancellation))
         {
-            try { File.Delete(partial); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            File.Delete(partial);
+            throw new InvalidDataException("Проверка SHA-256 не прошла. Скачай обновление заново.");
         }
+        cancellation.ThrowIfCancellationRequested();
+        File.Move(partial, installer, overwrite: true);
+        progress.Report(100);
+        foreach (var old in Directory.EnumerateFiles(folder, "SALOM-update*"))
+            if (!old.Equals(installer, StringComparison.OrdinalIgnoreCase))
+                try { File.Delete(old); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        return installer;
+    }
+
+    private static async Task<bool> MatchesAsync(string path, DesktopRelease release, CancellationToken cancellation)
+    {
+        await using var input = File.OpenRead(path);
+        return input.Length == release.Size && CryptographicOperations.FixedTimeEquals(
+            await SHA256.HashDataAsync(input, cancellation), release.Sha256);
     }
 }

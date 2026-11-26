@@ -98,7 +98,7 @@ def initialize():
         raise RuntimeError('SALOM_DATABASE_URL is required on this server')
     if PG_DSN:
         required = {
-            'profiles': 'id,token_hash,name,username,username_key,is_active,created,updated,online_at,typing_to,typing_at,avatar_url',
+            'profiles': 'id,token_hash,name,username,username_key,is_active,created,updated,online_at,typing_to,typing_at,avatar_url,about',
             'accounts': 'profile_id,firebase_uid,phone,email,password_hash,created,password_changed,google_linked',
             'sessions': 'token_hash,profile_id,created,expires,verified_at',
             'email_challenges': 'id,email,code_hash,expires,created,attempts,ready,verified,ticket_hash,used',
@@ -125,6 +125,7 @@ def initialize():
               CREATE INDEX IF NOT EXISTS call_push_jobs_pending ON call_push_jobs(state,next_at);''')
             db.execute("ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS media_mode TEXT NOT NULL DEFAULT 'audio'")
             db.execute("ALTER TABLE attachments ADD COLUMN IF NOT EXISTS sha256 TEXT")
+            db.execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS about TEXT NOT NULL DEFAULT ''")
             db.execute(REACTION_SCHEMA)
             db.execute(SESSION_DEVICE_SCHEMA)
             for table, columns in required.items():
@@ -178,6 +179,7 @@ def initialize():
         if 'typing_to' not in profile_columns: db.execute('ALTER TABLE profiles ADD COLUMN typing_to TEXT')
         if 'typing_at' not in profile_columns: db.execute('ALTER TABLE profiles ADD COLUMN typing_at REAL NOT NULL DEFAULT 0')
         if 'avatar_url' not in profile_columns: db.execute('ALTER TABLE profiles ADD COLUMN avatar_url TEXT')
+        if 'about' not in profile_columns: db.execute("ALTER TABLE profiles ADD COLUMN about TEXT NOT NULL DEFAULT ''")
         message_columns = {row['name'] for row in db.execute('PRAGMA table_info(messages)')}
         if 'delivered_at' not in message_columns: db.execute('ALTER TABLE messages ADD COLUMN delivered_at REAL')
         if 'read_at' not in message_columns: db.execute('ALTER TABLE messages ADD COLUMN read_at REAL')
@@ -390,6 +392,7 @@ class ProfileInput(BaseModel):
     device_id: str = Field(min_length=36, max_length=36)
     name: str = Field(min_length=1, max_length=80)
     username: str = Field(default='', max_length=24)
+    about: str | None = Field(default=None, max_length=160)
 
 @app.get('/health')
 def health():
@@ -427,10 +430,17 @@ def profile(body: ProfileInput, request: Request, authorization: str | None = He
         if existing and username.lower() != (existing['username_key'] or '') and not db.execute('SELECT 1 FROM accounts WHERE profile_id=?', (body.device_id,)).fetchone():
             raise HTTPException(403, 'Подключи Google перед выбором нового username')
         try:
-            db.execute('UPDATE profiles SET name=?,username=?,username_key=?,updated=? WHERE id=?', (name, username or None, username.lower() or None, now, body.device_id))
+            db.execute('UPDATE profiles SET name=?,username=?,username_key=?,updated=?,about=COALESCE(?,about) WHERE id=?',
+                       (name, username or None, username.lower() or None, now,
+                        body.about.strip() if body.about is not None else None, body.device_id))
         except INTEGRITY_ERRORS:
             raise HTTPException(409, 'Этот username уже занят. Выбери другой')
-        return public(db.execute('SELECT * FROM profiles WHERE id=?', (body.device_id,)).fetchone())
+        row = db.execute('SELECT * FROM profiles WHERE id=?', (body.device_id,)).fetchone()
+        result = profile_details(dict(row))
+    if redis_sync is not None:
+        try: redis_sync.delete('salom:cache:profile:' + body.device_id)
+        except Exception: pass
+    return result
 
 @app.get('/search')
 def search(q: str = Query(min_length=1, max_length=64), authorization: str | None = Header(default=None)):
@@ -833,6 +843,9 @@ def register_push(body: PushTokenInput, authorization: str | None = Header(defau
                 raise HTTPException(409, 'Этот токен уже связан с другим профилем')
     return {'registered': body.enabled}
 
+def profile_details(row):
+    return {**with_presence(row), 'about': row.get('about') or '', 'joined_at': row.get('created')}
+
 @app.get('/profiles/{peer_id}')
 def get_profile(peer_id: str, authorization: str | None = Header(default=None)):
     current_profile(authorization)
@@ -840,7 +853,9 @@ def get_profile(peer_id: str, authorization: str | None = Header(default=None)):
     if cache is not None:
         try:
             cached = cache.get('salom:cache:profile:' + peer_id)
-            if cached: return with_presence(json.loads(cached))
+            if cached:
+                data = json.loads(cached)
+                if 'created' in data and 'about' in data: return profile_details(data)
         except Exception:
             pass
     with connect() as db:
@@ -848,9 +863,9 @@ def get_profile(peer_id: str, authorization: str | None = Header(default=None)):
         if not row: raise HTTPException(404, 'Профиль недоступен')
         result = dict(row)
         if cache is not None:
-            try: cache.setex('salom:cache:profile:' + peer_id, 20, json.dumps({key: result.get(key) for key in ('id','name','username','is_active','avatar_url','online_at')}, separators=(',', ':')))
+            try: cache.setex('salom:cache:profile:' + peer_id, 20, json.dumps({key: result.get(key) for key in ('id','name','username','is_active','avatar_url','online_at','created','about')}, separators=(',', ':')))
             except Exception: pass
-        return with_presence(result)
+        return profile_details(result)
 
 @app.post('/presence')
 def heartbeat(authorization: str | None = Header(default=None)):

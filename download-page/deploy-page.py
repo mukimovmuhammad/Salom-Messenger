@@ -14,6 +14,10 @@ paths = (
     'site-162.js',
     'privacy/index.html',
     'terms/index.html',
+    '.well-known/assetlinks.json',
+    'profile-link.css',
+    'profile-link.js',
+    'profile-link.html',
     'index.html',
 )
 
@@ -53,6 +57,7 @@ def deploy(source):
     applied = []
     try:
         for name in paths:
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
             install(source / name, root / name)
             applied.append(name)
     except Exception:

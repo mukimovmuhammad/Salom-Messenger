@@ -2,6 +2,7 @@ package com.mukimov.salom
 
 /** Process-wide call gate shared by FCM, the chat screen and notification actions. */
 internal object CallSessionManager {
+    private const val RING_TIMEOUT_MS = 45_000L
     enum class State { RINGING, CONNECTING, CONNECTED }
     private var callId: String? = null
     private var state: State? = null
@@ -9,7 +10,7 @@ internal object CallSessionManager {
     private val ended = LinkedHashSet<String>()
 
     @Synchronized fun incoming(id: String): Boolean {
-        if (state == State.RINGING && System.currentTimeMillis() - startedAt > 45_000L) callId?.let(::end)
+        if (state == State.RINGING && System.currentTimeMillis() - startedAt > RING_TIMEOUT_MS) callId?.let(::end)
         if (id in ended) return false
         if (callId == id) return false
         if (callId != null) return false
@@ -39,4 +40,7 @@ internal object CallSessionManager {
     }
 
     @Synchronized fun current(id: String): State? = if (callId == id) state else null
+
+    @Synchronized fun hasActiveCall(): Boolean =
+        state != null && (state != State.RINGING || System.currentTimeMillis() - startedAt <= RING_TIMEOUT_MS)
 }

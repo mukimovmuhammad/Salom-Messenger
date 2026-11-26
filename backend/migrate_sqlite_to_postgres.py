@@ -15,7 +15,7 @@ import psycopg
 
 
 TABLES = {
-    "profiles": ("id", "token_hash", "name", "username", "username_key", "is_active", "created", "updated", "online_at", "typing_to", "typing_at", "avatar_url"),
+    "profiles": ("id", "token_hash", "name", "username", "username_key", "is_active", "created", "updated", "online_at", "typing_to", "typing_at", "avatar_url", "about"),
     "profile_avatars": ("owner_id", "revision", "jpeg_base64"),
     "registrations": ("ip", "at"),
     "attachments": ("id", "owner_id", "peer_id", "name", "mime", "size", "created", "ready", "kind", "duration_ms", "waveform", "sha256"),
@@ -47,7 +47,7 @@ ORDER_COLUMNS = {
     "call_sessions": ("id",), "call_push_jobs": ("call_id",),
     "message_reactions": ("message_id", "actor_id"), "session_devices": ("token_hash",),
 }
-LEGACY_DEFAULTS = {"attachments": {"sha256": "NULL"}, "call_sessions": {"media_mode": "'audio'"}}
+LEGACY_DEFAULTS = {"profiles": {"about": "''"}, "attachments": {"sha256": "NULL"}, "call_sessions": {"media_mode": "'audio'"}}
 
 DDL = """
 CREATE TABLE profiles (
@@ -55,7 +55,7 @@ CREATE TABLE profiles (
   username TEXT, username_key TEXT UNIQUE, is_active SMALLINT NOT NULL DEFAULT 1,
   created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL,
   online_at DOUBLE PRECISION NOT NULL DEFAULT 0, typing_to TEXT,
-  typing_at DOUBLE PRECISION NOT NULL DEFAULT 0, avatar_url TEXT
+  typing_at DOUBLE PRECISION NOT NULL DEFAULT 0, avatar_url TEXT, about TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE profile_avatars (
   owner_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,

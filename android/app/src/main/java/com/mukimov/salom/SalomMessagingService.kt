@@ -120,8 +120,8 @@ class SalomMessagingService : FirebaseMessagingService() {
             return
         }
         if (message.data["type"] == "missed_call") { showMissedCall(message.data); return }
-        val peerId = message.data["peer_id"] ?: return
-        val messageId = message.data["message_id"] ?: return
+        val peerId = message.data["peer_id"]?.takeIf(::notificationUuid) ?: return
+        val messageId = message.data["message_id"]?.toLongOrNull()?.takeIf { it > 0 } ?: return
         val manager = NotificationManagerCompat.from(this)
         val appVisible = MainActivity.visible
         val activePeer = local.getString("active_peer_id", null)
@@ -144,12 +144,15 @@ class SalomMessagingService : FirebaseMessagingService() {
         val privatePreview = local.getBoolean("private_notification_preview", false)
         val title = if (privatePreview) "Салом" else message.data["title"] ?: message.notification?.title ?: "Салом"
         val body = if (privatePreview) "Новое сообщение" else message.data["body"] ?: message.notification?.body ?: "Новое сообщение"
-        val silent = appVisible
+        val owner = local.getString("owner_profile_id", null).orEmpty()
+        val muted = MessageNotificationReceiver.muted(this, owner, peerId)
+        val silent = appVisible || muted
         val notification = NotificationCompat.Builder(this, if (silent) PushNotifications.SILENT_CHANNEL else PushNotifications.CHANNEL)
             .setSmallIcon(R.drawable.ic_notification).setColor(0xFFFFC400.toInt())
             .setContentTitle(title).setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(pending).setAutoCancel(true).setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        if (notificationUuid(owner)) MessageNotificationReceiver.addActions(this, notification, owner, peerId, messageId, muted)
         if (Build.VERSION.SDK_INT < 26) notification.setSound(if (silent) null else PushNotifications.soundUri(this)).setPriority(if (silent) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_HIGH)
         try { manager.notify("salom-peer-$peerId", 0, notification.build()) }
         catch (_: SecurityException) { synchronized(recentMessages) { recentMessages.remove(key) } }

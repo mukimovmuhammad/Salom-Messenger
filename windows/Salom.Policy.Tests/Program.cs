@@ -75,12 +75,22 @@ try
     const string file = "SALOM-0.16.2-Release-Setup.exe";
     var digest = Convert.ToHexString(SHA256.HashData(payload));
     var manifest = Manifest(file, digest);
+    var requests = 0;
+    long? requestedOffset = null;
     using var http = new HttpClient(new StubUpdateHttp(request =>
     {
         if (request.RequestUri == new Uri(DesktopUpdates.Origin, "version.json"))
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(manifest) };
         if (request.RequestUri == new Uri(DesktopUpdates.Origin, file))
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(payload) };
+        {
+            requests++;
+            requestedOffset = request.Headers.Range?.Ranges.Single().From;
+            if (requestedOffset is not { } offset)
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(payload) };
+            var content = new ByteArrayContent(payload[(int)offset..]);
+            content.Headers.ContentRange = new System.Net.Http.Headers.ContentRangeHeaderValue(offset, payload.Length - 1, payload.Length);
+            return new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = content };
+        }
         throw new Exception("Unexpected request: " + request.RequestUri);
     }));
     var updates = new DesktopUpdates(http);
@@ -97,8 +107,12 @@ try
         catch (InvalidDataException) { }
     }
     var progress = new TestProgress();
+    File.WriteAllBytes(Path.Combine(downloadRoot.FullName, $"SALOM-update-{digest}.exe.part"), payload[..12345]);
     var installer = await updates.DownloadAsync(release, downloadRoot.FullName, progress, CancellationToken.None);
-    if (!File.ReadAllBytes(installer).SequenceEqual(payload) || progress.Value != 100) throw new Exception("Verified download did not finish");
+    if (!File.ReadAllBytes(installer).SequenceEqual(payload) || progress.Value != 100 || requestedOffset != 12345)
+        throw new Exception("Verified download did not resume from the saved offset");
+    if (installer != await updates.DownloadAsync(release, downloadRoot.FullName, progress, CancellationToken.None) || requests != 1)
+        throw new Exception("The verified installer was downloaded twice");
     try
     {
         await updates.DownloadAsync(release with { Sha256 = new byte[32] }, downloadRoot.FullName, progress, CancellationToken.None);
